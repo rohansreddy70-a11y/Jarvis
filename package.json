@@ -1,0 +1,14 @@
+{
+  "name": "jarvis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JARVIS — modular personal AI assistant (dashboard, chat, memory, tasks, approvals).",
+  "type": "module",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
+    "check-config": "node --disable-warning=ExperimentalWarning server/check-config.js"
+  }
+}
