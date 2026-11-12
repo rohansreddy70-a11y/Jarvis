@@ -2,7 +2,7 @@
 
 A modular, self-hosted personal AI assistant: a dark command-center dashboard, a conversational engine that can act (via tool calling) on your tasks, reminders, memory and drafts, and a strict **approval gate** for anything sensitive.
 
-> **Status: Phases 1–3 + task/reminder core are implemented.** Email, calendar, messaging, web research, file storage, document generation and scheduled automations are designed for but **not connected yet** — the UI says so explicitly and JARVIS never invents data from them.
+> **Status:** dashboard, AI chat, memory, tasks, reminders, approvals, **built-in calendar**, **Gmail** (OAuth), **WhatsApp notifications** and the **automation engine** (nightly "tomorrow's schedule") are implemented. Web research, file storage, document generation and messaging other people are **not built yet** — the UI says so explicitly and JARVIS never invents data from them.
 
 ## What works today
 
@@ -13,6 +13,10 @@ A modular, self-hosted personal AI assistant: a dark command-center dashboard, a
 | **Today** | Tasks organized into **Top 3 / Important / Routine / Upcoming** with a reason for each, overdue warnings, one-click "Generate briefing". |
 | **Tasks & reminders** | Full create/edit/complete/cancel; reminders fire in the background (exactly once) into the notification center. |
 | **Memory** | Long-term, searchable, categorized memory (preferences, writing style, projects, deadlines, decisions…). View, correct, delete. **Refuses credentials.** Kept separate from conversation history. |
+| **Calendar** | Built-in calendar: add events in the app or by chat ("dentist tomorrow at 4pm"). Next-3-weeks agenda with events, deadlines and reminders. |
+| **Bedtime briefing** | Every night (default 21:30 in your time zone) JARVIS sends tomorrow's events, deadlines, reminders and top priorities — in-app and to your WhatsApp. If nothing is planned, it asks you to plan tomorrow. Configurable time/channels, on/off, run history, once-per-day guarantee. |
+| **Gmail** | Connect with Google sign-in; inbox/unread/important views, read messages, "Summarize with JARVIS", "Draft reply". Sending only after approval. Setup: [docs/SETUP-GMAIL.md](docs/SETUP-GMAIL.md). |
+| **WhatsApp** | Notifications to your own number via Meta WhatsApp Cloud API. Setup: [docs/SETUP-WHATSAPP.md](docs/SETUP-WHATSAPP.md). |
 | **Drafts** | Emails, messages and status updates saved as drafts for review. Never sent automatically. |
 | **Approvals** | Sending, and the assistant's delete requests, create an approval card (action, target, content, **Confirm / Cancel**). Results report what really happened. |
 | **Activity log** | Append-only record of important operations, with secrets redacted. |
@@ -26,7 +30,7 @@ Requires **Node.js 22.5+** (uses the built-in `node:sqlite`). There are **no npm
 cp .env.example .env        # then edit .env — add your AI key
 npm run check-config        # validates config without printing secrets
 npm start                   # http://127.0.0.1:3000
-npm test                    # 18 tests: services, approvals, engine, HTTP, config
+npm test                    # 27 tests: services, approvals, engine, integrations, automations, HTTP
 ```
 
 Minimum `.env` for Groq:
@@ -34,7 +38,7 @@ Minimum `.env` for Groq:
 ```env
 AI_PROVIDER=groq
 GROQ_API_KEY=your-key-here
-JARVIS_TIMEZONE=Asia/Kolkata   # your IANA time zone
+JARVIS_TIMEZONE=Asia/Kolkata   # IANA time zone (India)
 JARVIS_USER_NAME=YourName
 ```
 
@@ -60,8 +64,12 @@ server/
     tools.js            Tool schemas + handlers (the assistant's "hands")
   services/             tasks, reminders, memory, drafts, approvals,
                         conversations, notifications, activity
+  automations/
+    engine.js           Scheduler: daily workflows, history, de-duplication
   integrations/
-    registry.js         Integration modules + honest status reporting
+    registry.js         Honest status reporting for every integration
+    google.js           Gmail via OAuth 2.0 (read + approved send)
+    whatsapp.js         WhatsApp Cloud API (owner-only notifications)
   lib/                  secrets redaction, time-zone helpers
 tests/                  node:test suites (scripted model for engine tests)
 ```
@@ -78,6 +86,9 @@ tests/                  node:test suites (scripted model for engine tests)
 - Memory rejects anything that looks like a password, API key, token or private key.
 - Optional bearer-token auth (constant-time compare); required for non-loopback binding.
 - Strict Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, no-referrer, cross-origin write requests blocked, 1 MB body limit, path-traversal-safe static serving, input validation on every endpoint.
+- Email content is treated as untrusted: the model is told never to follow instructions inside emails, and it has no tool that sends without approval.
+- Google OAuth uses a one-time, expiring `state` (CSRF protection); the refresh token stays in the local DB. Outgoing email rejects header injection.
+- WhatsApp can only message `WHATSAPP_NOTIFY_TO` — there is no code path to message anyone else.
 - JARVIS never makes purchases or financial transactions — there is no tool for it.
 
 ## Roadmap
@@ -87,17 +98,12 @@ tests/                  node:test suites (scripted model for engine tests)
 | 1 | Dashboard & AI chat | ✅ Done |
 | 2 | AI model & API connection (Groq / OpenAI / compatible) | ✅ Done |
 | 3 | Memory & context | ✅ Done |
-| 5 | Task manager & reminders | ✅ Done (core) |
-| 4/5 | Email & calendar (Gmail / Microsoft 365 via OAuth) | ⏳ Needs your provider choice + OAuth app |
+| 4 | Gmail (read, summarize, approved send) | ✅ Done — needs your Google OAuth client |
+| 4 | Built-in calendar | ✅ Done |
+| 5 | Tasks & reminders | ✅ Done |
+| 5 | WhatsApp notifications (to you) | ✅ Done — needs Meta WhatsApp Cloud API setup |
+| 7 | Automations: bedtime schedule ✅, morning schedule ✅ (off by default) · midday check-in, end-of-day wrap-up, weekly review ⏳ | In progress |
 | 5 | Web research with citations | ⏳ Needs a search API (e.g. Tavily, Brave) |
 | 6 | Document generation (DOCX / PDF / XLSX / PPTX) | ⏳ Planned |
-| 7 | Automations: morning briefing, midday check-in, wrap-up, weekly review | ⏳ Planned (scheduler, enable/disable, history, de-dup) |
+| — | Messaging other people (with approval) | ⏳ Planned |
 | 8 | Advanced voice assistant | Later |
-
-## Decisions needed from you
-
-1. **Email & calendar provider** — Google Workspace or Microsoft 365? (Determines the OAuth setup.)
-2. **Web research API** — Tavily, Brave Search, or another?
-3. **Your time zone** and preferred **briefing times** (morning / midday / end of day / weekly).
-4. **Where it runs** — your laptop only, or a server reachable from your phone?
-5. **Messaging** — Slack, Microsoft Teams, WhatsApp, or none?

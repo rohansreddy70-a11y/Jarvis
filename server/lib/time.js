@@ -40,3 +40,32 @@ export class ValidationError extends Error {
     this.status = 400;
   }
 }
+
+// Local calendar parts of an instant in a time zone.
+export function localParts(date, timeZone) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).map((x) => [x.type, x.value]),
+  );
+  return { dateKey: `${p.year}-${p.month}-${p.day}`, hhmm: `${p.hour}:${p.minute}`, minutes: +p.hour * 60 + +p.minute };
+}
+
+// Bounds of the local day `offsetDays` from the day containing `date` (0 = today, 1 = tomorrow).
+export function dayBounds(date, timeZone, offsetDays = 0) {
+  let { start, end } = localDayBounds(date, timeZone);
+  for (let i = 0; i < offsetDays; i++) ({ start, end } = localDayBounds(new Date(end.getTime() + 12 * 3600e3), timeZone));
+  return { start, end, dateKey: localParts(new Date(start.getTime() + 12 * 3600e3), timeZone).dateKey };
+}
+
+// Bounds of a local calendar date given as YYYY-MM-DD.
+export function boundsForDateKey(dateKey, timeZone) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new ValidationError('Date must be YYYY-MM-DD, "today" or "tomorrow".');
+  const noonUtc = new Date(`${dateKey}T12:00:00Z`);
+  if (Number.isNaN(noonUtc.getTime())) throw new ValidationError(`"${dateKey}" is not a valid date.`);
+  return { ...localDayBounds(noonUtc, timeZone), dateKey };
+}
+
+export function formatTime(date, timeZone) {
+  return new Intl.DateTimeFormat('en-IN', { timeZone, hour: 'numeric', minute: '2-digit' }).format(date);
+}

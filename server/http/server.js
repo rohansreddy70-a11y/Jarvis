@@ -19,6 +19,8 @@ const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), geolocation=(), microphone=(self)',
 };
 
+const PUBLIC_API = new Set(['/api/health', '/api/integrations/google/callback']);
+
 function safeEqual(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -41,7 +43,7 @@ export function createServer(app) {
 
     if (pathname.startsWith('/api/')) {
       try {
-        if (accessToken && pathname !== '/api/health') {
+        if (accessToken && !PUBLIC_API.has(pathname)) {
           const header = req.headers.authorization || '';
           const token = header.startsWith('Bearer ') ? header.slice(7) : '';
           if (!token || !safeEqual(token, accessToken)) throw new HttpError(401, 'Access token required.');
@@ -57,6 +59,10 @@ export function createServer(app) {
         if (route.methodNotAllowed) throw new HttpError(405, 'Method not allowed.');
         const body = await readJson(req);
         const result = await route.handler({ params: route.params, query: url.searchParams, body });
+        if (result && typeof result.__redirect === 'string' && result.__redirect.startsWith('/')) {
+          res.writeHead(302, { Location: result.__redirect, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
+          return res.end();
+        }
         return send(res, 200, result ?? { ok: true });
       } catch (err) {
         const status = err.status || 500;

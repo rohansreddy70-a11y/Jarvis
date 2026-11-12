@@ -11,9 +11,14 @@ import { createConversationService } from './services/conversations.js';
 import { createToolbox } from './ai/tools.js';
 import { createEngine } from './ai/engine.js';
 import { createProviderFromConfig } from './ai/provider.js';
-import { isConnected } from './integrations/registry.js';
+import { integrationStatus } from './integrations/registry.js';
+import { createEventService } from './services/events.js';
+import { createScheduleService } from './services/schedule.js';
+import { createGoogle } from './integrations/google.js';
+import { createWhatsApp } from './integrations/whatsapp.js';
+import { createAutomationEngine } from './automations/engine.js';
 
-export function createApp(config, { provider } = {}) {
+export function createApp(config, { provider, fetchImpl } = {}) {
   const db = openDatabase(config.dbPath);
   const activity = createActivityService(db);
   const notifications = createNotificationService(db);
@@ -27,7 +32,17 @@ export function createApp(config, { provider } = {}) {
     drafts: createDraftService(db, activity),
     approvals: createApprovalService(db, activity, notifications),
     conversations: createConversationService(db),
+    events: createEventService(db, activity),
   };
+  services.schedule = createScheduleService(services, config);
+
+  // ── Integrations (independent modules) ──
+  const net = fetchImpl ? { fetchImpl } : {};
+  const google = createGoogle(config, db, net);
+  const whatsapp = createWhatsApp(config.env, net);
+  const status = () => integrationStatus(config, { google, whatsapp });
+  services.integrations = { google, whatsapp, status };
+  services.automations = createAutomationEngine({ db, config, services, whatsapp });
 
   // ── Approval executors: the ONLY code paths that perform sensitive actions. ──
   services.approvals.registerExecutor('task.delete', {
@@ -36,16 +51,29 @@ export function createApp(config, { provider } = {}) {
   services.approvals.registerExecutor('memory.delete', {
     execute: ({ id }) => { services.memory.remove(id, 'assistant (approved)'); return 'Memory deleted.'; },
   });
+  services.approvals.registerExecutor('event.delete', {
+    execute: ({ id }) => `Deleted event "${services.events.remove(id, 'assistant (approved)').title}".`,
+  });
   services.approvals.registerExecutor('draft.send', {
-    execute: ({ draft_id }) => {
+    execute: async ({ draft_id }) => {
       const d = services.drafts.get(draft_id);
-      const channel = d.kind === 'email' ? 'email' : 'messaging';
-      if (!isConnected(config, channel)) {
+      if (d.status === 'sent') throw new Error('This draft was already sent.');
+      if (d.kind !== 'email') {
         services.drafts.setStatus(d.id, 'draft');
-        throw new Error(`Not sent: the ${channel} integration is not connected yet. The draft is kept.`);
+        throw new Error('Not sent: sending messages to other people is not implemented yet. The draft is kept.');
       }
-      // Phase 5 will dispatch to the connected integration module here.
-      throw new Error(`Not sent: ${channel} sending is not implemented yet.`);
+      if (!google.connected) {
+        services.drafts.setStatus(d.id, 'draft');
+        throw new Error('Not sent: Gmail is not connected. The draft is kept.');
+      }
+      try {
+        const id = await google.send({ to: d.recipient, subject: d.subject, body: d.body });
+        services.drafts.setStatus(d.id, 'sent');
+        return `Email sent to ${d.recipient} (Gmail message id ${id}).`;
+      } catch (err) {
+        services.drafts.setStatus(d.id, 'draft');
+        throw new Error(`Not sent: ${err.message} The draft is kept.`);
+      }
     },
   });
 
@@ -62,6 +90,7 @@ export function createApp(config, { provider } = {}) {
     startBackgroundJobs(intervalMs = 15_000) {
       const tick = () => {
         try { services.reminders.fireDue(); } catch (err) { activity.log('system.error', `Reminder check failed: ${err.message}`); }
+        services.automations.tick().catch((err) => activity.log('system.error', `Automation check failed: ${err.message}`));
       };
       tick();
       ticker = setInterval(tick, intervalMs);

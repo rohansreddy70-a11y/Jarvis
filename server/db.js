@@ -111,6 +111,43 @@ const MIGRATIONS = [
     value TEXT NOT NULL
   );
   `,
+  // v2 — built-in calendar, automations, integration tokens
+  `
+  CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    location TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_events_start ON events(starts_at);
+
+  CREATE TABLE automations (
+    id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    run_at TEXT NOT NULL,
+    channels TEXT NOT NULL DEFAULT '["in_app"]',
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE automation_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    automation_id TEXT NOT NULL,
+    run_key TEXT NOT NULL,
+    trigger TEXT NOT NULL DEFAULT 'schedule',
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','success','partial','failed')),
+    output TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    UNIQUE (automation_id, run_key)
+  );
+  CREATE INDEX idx_runs_automation ON automation_runs(automation_id, id);
+  `,
 ];
 
 export function openDatabase(dbPath) {

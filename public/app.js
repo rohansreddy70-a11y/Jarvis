@@ -179,7 +179,7 @@ function openModal(content) {
 function closeModal() { $('#modal-root').replaceChildren(); }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); closeDrawer(); } });
 
-const ACTION_LABELS = { 'task.delete': 'Delete task', 'memory.delete': 'Delete memory', 'draft.send': 'Send draft' };
+const ACTION_LABELS = { 'event.delete': 'Delete event', 'task.delete': 'Delete task', 'memory.delete': 'Delete memory', 'draft.send': 'Send draft' };
 
 async function showApproval(id) {
   const a = await api(`/approvals/${id}`);
@@ -416,7 +416,6 @@ views.home = async (root) => {
   const t = d.tasks;
   const top = t.groups.top.slice(0, 3);
   const email = d.integrations.find((i) => i.id === 'email');
-  const cal = d.integrations.find((i) => i.id === 'calendar');
   const research = d.integrations.find((i) => i.id === 'research');
   const max = Math.max(1, ...Object.values(t.byPriority));
 
@@ -427,9 +426,9 @@ views.home = async (root) => {
       h('p', {}, d.status.ai.configured ? 'Your daily briefing is ready.' : 'Connect an AI provider in .env to enable conversational briefings.'),
       h('div', { class: 'brief-grid' },
         h('a', { class: 'brief', href: '#/email' }, icon('mail'), h('div', { class: 'label' }, 'EMAILS'),
-          h('div', { class: 'sub' }, email.connected ? 'Inbox overview' : 'Not connected'), h('div', { class: 'value' }, `${d.drafts.length}`), h('div', { class: 'sub' }, 'drafts awaiting review')),
+          h('div', { class: 'sub' }, email.connected ? `Inbox · ${email.account || 'Gmail'}` : email.status === 'needs_authorization' ? 'Ready to connect' : 'Not connected'), h('div', { class: 'value' }, `${d.drafts.length}`), h('div', { class: 'sub' }, 'drafts awaiting review')),
         h('a', { class: 'brief', href: '#/calendar' }, icon('cal'), h('div', { class: 'label' }, 'CALENDAR'),
-          h('div', { class: 'sub' }, cal.connected ? "Today's schedule" : 'Not connected'), h('div', { class: 'value' }, `${d.reminders.length}`), h('div', { class: 'sub' }, 'upcoming reminders')),
+          h('div', { class: 'sub' }, "Today's schedule"), h('div', { class: 'value' }, `${d.today.events.length}`), h('div', { class: 'sub' }, `event${d.today.events.length === 1 ? '' : 's'} today · ${d.tomorrow.events.length} tomorrow`)),
         h('a', { class: 'brief', href: '#/today' }, icon('check'), h('div', { class: 'label' }, 'TASKS'),
           h('div', { class: 'sub' }, 'Your priorities'), h('div', { class: 'value' }, `${t.open}`), h('div', { class: 'sub' }, `open · ${t.overdue} overdue`)),
         h('a', { class: 'brief', href: '#/research' }, icon('spark'), h('div', { class: 'label' }, 'INTELLIGENCE'),
@@ -611,13 +610,57 @@ views.tasks = async (root) => {
 };
 
 views.email = async (root) => {
-  const drafts = await api('/drafts');
   const e = integ('email');
+  const params = new URLSearchParams((location.hash.split('?')[1]) || '');
+  if (params.get('connected')) { toast('Gmail connected.'); history.replaceState(null, '', '#/email'); }
+  if (params.get('error')) { toast(params.get('error'), 'err'); history.replaceState(null, '', '#/email'); }
+  const drafts = await api('/drafts');
   const reload = () => route();
-  fill(root, 
-    !e?.connected ? notConnected('Email', e?.requires, 'Inbox summaries arrive in Phase 5. You can already prepare drafts below — they are never sent without your approval.') : null,
+  const filter = sessionStorage.getItem('jarvis.mailQ') || 'in:inbox';
+  let inbox = null;
+  let inboxError = null;
+  if (e?.connected) {
+    try { inbox = await api(`/email/messages?q=${encodeURIComponent(filter)}&max=20`); } catch (err) { inboxError = err.message; }
+  }
+  const connect = async () => {
+    try { const { url } = await api('/integrations/google/auth-url'); location.href = url; } catch (err) { toast(err.message, 'err'); }
+  };
+  const FILTERS = [['in:inbox', 'Inbox'], ['is:unread in:inbox', 'Unread'], ['is:important newer_than:7d', 'Important'], ['in:sent', 'Sent']];
+
+  let inboxCard;
+  if (!e || e.status === 'not_configured') {
+    inboxCard = h('div', { class: 'notice' }, icon('mail'), h('div', {},
+      h('strong', {}, 'Gmail is not set up yet. '),
+      'Create a Google OAuth client, then add ', h('code', {}, 'GOOGLE_CLIENT_ID'), ' and ', h('code', {}, 'GOOGLE_CLIENT_SECRET'),
+      ' to .env and restart. Step-by-step guide: ', h('code', {}, 'docs/SETUP-GMAIL.md'), '.'));
+  } else if (e.status === 'needs_authorization') {
+    inboxCard = h('div', { class: 'card' }, emptyState('mail', 'Connect your Gmail',
+      'JARVIS will ask Google for permission to read your mail and to send mail. Nothing is ever sent without your approval, and you can disconnect at any time.',
+      h('button', { class: 'btn primary', onclick: connect }, icon('mail'), 'Connect Gmail')));
+  } else {
+    inboxCard = h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', {}, icon('mail'), 'Inbox'), h('span', { class: 'dim' }, e.account || ''), h('span', { class: 'spacer' }),
+        h('button', {
+          class: 'btn sm primary', onclick: () => {
+            sessionStorage.setItem('jarvis.pending', 'Summarize my important and unread emails from the last 2 days. Group them into: needs a reply, deadlines/requests, and FYI. For each one needing a reply, suggest a short response.');
+            state.conversationId = null; location.hash = '#/chat';
+          },
+        }, icon('spark'), 'Summarize with JARVIS')),
+      h('div', { class: 'tabs' }, FILTERS.map(([q, l]) => h('button', { class: `tab${q === filter ? ' active' : ''}`, onclick: () => { sessionStorage.setItem('jarvis.mailQ', q); route(); } }, l))),
+      inboxError ? h('div', { class: 'notice' }, icon('shield'), h('div', {}, inboxError))
+        : inbox.length ? h('div', { class: 'list' }, inbox.map((m) => h('div', { class: 'item', style: 'cursor:pointer', onclick: () => showEmail(m.id) },
+          h('span', { class: `dot ${m.unread ? 'ok' : ''}`, style: 'margin-top:8px', title: m.unread ? 'Unread' : 'Read' }),
+          h('div', { class: 'item-body' },
+            h('div', { class: 'item-title', style: m.unread ? 'font-weight:700' : '' }, m.subject),
+            h('div', { class: 'item-meta' }, m.from.replace(/<.*>/, '').trim() || m.from, '·', fmt.dt(m.date), m.important ? h('span', { class: 'pill warn' }, 'important') : null),
+            h('div', { class: 'small muted', style: 'margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, m.snippet)))))
+          : emptyState('mail', 'No messages', 'Nothing matches this view.'));
+  }
+
+  fill(root,
+    inboxCard,
     h('div', { class: 'card section-gap' },
-      h('div', { class: 'card-head' }, h('h2', {}, icon('mail'), 'Drafts'), h('span', { class: 'spacer' }), h('button', { class: 'btn sm primary', onclick: () => draftForm(null, reload) }, icon('plus'), 'New draft')),
+      h('div', { class: 'card-head' }, h('h2', {}, icon('edit'), 'Drafts'), h('span', { class: 'spacer' }), h('button', { class: 'btn sm', onclick: () => draftForm(null, reload) }, icon('plus'), 'New draft')),
       drafts.length ? h('div', { class: 'list' }, drafts.map((d) => h('div', { class: 'item' },
         h('div', { class: 'item-body' },
           h('div', { class: 'item-title' }, d.subject || '(no subject)'),
@@ -626,11 +669,32 @@ views.email = async (root) => {
           h('div', { class: 'small muted', style: 'margin-top:6px;white-space:pre-wrap;max-height:4.5em;overflow:hidden' }, d.body)),
         h('div', { class: 'item-actions' },
           h('button', { class: 'icon-btn', 'aria-label': 'Edit draft', onclick: () => draftForm(d, reload) }, icon('edit')),
-          d.status === 'draft' ? h('button', { class: 'btn sm', onclick: async () => { const a = await api(`/drafts/${d.id}/request-send`, { method: 'POST' }); showApproval(a.id); } }, icon('send'), 'Send…') : null,
+          d.status === 'draft' ? h('button', { class: 'btn sm', onclick: async () => { try { const a = await api(`/drafts/${d.id}/request-send`, { method: 'POST' }); showApproval(a.id); } catch (err) { toast(err.message, 'err'); } } }, icon('send'), 'Send…') : null,
           h('button', { class: 'icon-btn', 'aria-label': 'Discard draft', onclick: () => confirmDialog('Discard this draft?', 'It will be hidden from your drafts list (kept in the database for the record).', async () => { await api(`/drafts/${d.id}/discard`, { method: 'POST' }); reload(); }, 'Discard') }, icon('trash'))))))
-        : emptyState('mail', 'No drafts', 'Ask JARVIS: "Draft a reply to Sam declining Thursday\'s meeting, friendly tone."')),
+        : emptyState('edit', 'No drafts', 'Ask JARVIS: "Draft a reply to Sam declining Thursday\'s meeting, friendly tone." Drafts are never sent without your approval.')),
   );
 };
+
+async function showEmail(id) {
+  openModal(h('div', {}, h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })));
+  try {
+    const m = await api(`/email/messages/${encodeURIComponent(id)}`);
+    openModal([
+      h('h2', {}, icon('mail'), m.subject),
+      h('dl', { class: 'kv' }, h('dt', {}, 'From'), h('dd', {}, m.from), h('dt', {}, 'To'), h('dd', {}, m.to), h('dt', {}, 'Date'), h('dd', {}, fmt.dt(m.date))),
+      h('div', { class: 'preview', style: 'max-height:50vh' }, m.body || m.snippet),
+      h('div', { class: 'modal-actions' },
+        h('button', { class: 'btn', onclick: closeModal }, 'Close'),
+        h('button', {
+          class: 'btn primary', onclick: () => {
+            closeModal();
+            sessionStorage.setItem('jarvis.pending', `Read email id ${m.id} ("${m.subject}") and draft a reply in my usual writing style. Save it as a draft; do not send.`);
+            state.conversationId = null; location.hash = '#/chat';
+          },
+        }, icon('spark'), 'Draft reply with JARVIS')),
+    ]);
+  } catch (err) { closeModal(); toast(err.message, 'err'); }
+}
 
 function draftForm(d, onDone) {
   const kind = h('select', { class: 'input' }, ['email', 'message', 'status_update'].map((k) => h('option', { value: k, selected: d?.kind === k }, k.replace('_', ' '))));
@@ -652,28 +716,75 @@ function draftForm(d, onDone) {
   h('div', { class: 'modal-actions' }, h('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', type: 'submit' }, 'Save draft'))));
 }
 
+function eventForm(ev, onDone, defaultDay) {
+  const start = ev?.starts_at || (() => { const d = defaultDay ? new Date(defaultDay) : new Date(); d.setMinutes(0, 0, 0); d.setHours(Math.max(d.getHours() + 1, 9)); return d.toISOString(); })();
+  const f = {
+    title: h('input', { class: 'input', required: true, maxlength: 300, value: ev?.title || '' }),
+    starts: h('input', { class: 'input', type: 'datetime-local', required: true, value: fmt.local(start) }),
+    ends: h('input', { class: 'input', type: 'datetime-local', value: fmt.local(ev?.ends_at || new Date(Date.parse(start) + 3600e3).toISOString()) }),
+    location: h('input', { class: 'input', value: ev?.location || '' }),
+    notes: h('textarea', { class: 'input' }, ev?.notes || ''),
+  };
+  openModal(h('form', {
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const body = {
+        title: f.title.value, location: f.location.value, notes: f.notes.value,
+        starts_at: new Date(f.starts.value).toISOString(), ends_at: f.ends.value ? new Date(f.ends.value).toISOString() : null,
+      };
+      try { await api(ev ? `/events/${ev.id}` : '/events', { method: ev ? 'PATCH' : 'POST', body }); closeModal(); toast(ev ? 'Event updated.' : 'Event added.'); onDone?.(); } catch (err) { toast(err.message, 'err'); }
+    },
+  }, h('h2', {}, icon('cal'), ev ? 'Edit event' : 'New event'),
+  h('div', { class: 'form-grid section-gap' },
+    h('label', { class: 'field full' }, 'Title', f.title),
+    h('label', { class: 'field' }, 'Starts', f.starts), h('label', { class: 'field' }, 'Ends', f.ends),
+    h('label', { class: 'field full' }, 'Location', f.location), h('label', { class: 'field full' }, 'Notes', f.notes)),
+  h('div', { class: 'modal-actions' }, h('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', type: 'submit' }, 'Save'))));
+  setTimeout(() => f.title.focus(), 50);
+}
+
 views.calendar = async (root) => {
-  const [tasks, reminders] = await Promise.all([api('/tasks'), api('/reminders')]);
-  const c = integ('calendar');
-  const events = [
-    ...tasks.filter((t) => t.due_at).map((t) => ({ at: t.due_at, title: t.title, kind: 'Deadline' })),
-    ...reminders.map((r) => ({ at: r.remind_at, title: r.message, kind: 'Reminder' })),
+  const from = new Date(Date.now() - 6 * 3600e3);
+  const to = new Date(Date.now() + 21 * 86400e3);
+  const [events, tasks, reminders, tomorrow] = await Promise.all([
+    api(`/events?from=${from.toISOString()}&to=${to.toISOString()}`), api('/tasks'), api('/reminders'), api('/schedule?day=tomorrow'),
+  ]);
+  const reload = () => route();
+  const items = [
+    ...events.map((ev) => ({ at: ev.starts_at, end: ev.ends_at, title: ev.title, kind: 'Event', ev })),
+    ...tasks.filter((t) => t.due_at && Date.parse(t.due_at) < to.getTime()).map((t) => ({ at: t.due_at, title: t.title, kind: 'Deadline' })),
+    ...reminders.filter((r) => Date.parse(r.remind_at) < to.getTime()).map((r) => ({ at: r.remind_at, title: r.message, kind: 'Reminder' })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const dayFmt = new Intl.DateTimeFormat(undefined, { timeZone: state.tz, weekday: 'long', month: 'short', day: 'numeric' });
+  const timeFmt = new Intl.DateTimeFormat(undefined, { timeZone: state.tz, hour: 'numeric', minute: '2-digit' });
   const byDay = new Map();
-  for (const ev of events) {
-    const k = new Intl.DateTimeFormat(undefined, { timeZone: state.tz, weekday: 'long', month: 'short', day: 'numeric' }).format(new Date(ev.at));
+  for (const it of items) {
+    const k = dayFmt.format(new Date(it.at));
     if (!byDay.has(k)) byDay.set(k, []);
-    byDay.get(k).push(ev);
+    byDay.get(k).push(it);
   }
-  fill(root, 
-    !c?.connected ? notConnected('Calendar', c?.requires, 'Meetings, participants and conflicts arrive in Phase 5. Below are deadlines and reminders JARVIS already tracks.') : null,
-    h('div', { class: 'card section-gap' }, h('h2', {}, icon('cal'), 'Deadlines & reminders'),
-      byDay.size ? [...byDay].map(([day, evs]) => h('div', { style: 'margin-bottom:14px' }, h('div', { class: 'eyebrow', style: 'margin-bottom:4px' }, day),
-        h('div', { class: 'list' }, evs.map((ev) => h('div', { class: 'item' },
-          h('span', { class: 'muted small', style: 'width:70px' }, new Intl.DateTimeFormat(undefined, { timeZone: state.tz, hour: 'numeric', minute: '2-digit' }).format(new Date(ev.at))),
-          h('div', { class: 'item-body' }, h('div', { class: 'item-title' }, ev.title)),
-          h('span', { class: `pill ${ev.kind === 'Deadline' ? 'warn' : 'info'}` }, ev.kind))))))
-        : emptyState('cal', 'Nothing scheduled', 'Add due dates to tasks or set reminders and they appear here.')),
+  const tCount = tomorrow.events.length + tomorrow.tasksDue.length + tomorrow.reminders.length;
+  fill(root,
+    h('div', { class: 'row', style: 'margin-bottom:16px' },
+      h('div', {}, h('div', { class: 'eyebrow' }, 'Built-in calendar'), h('div', { class: 'muted small' }, `Times in ${state.tz}. Add plans here or just tell JARVIS.`)),
+      h('span', { style: 'flex:1' }),
+      h('button', { class: 'btn primary', onclick: () => eventForm(null, reload) }, icon('plus'), 'New event')),
+    h('div', { class: 'card', style: 'margin-bottom:18px;border-color:var(--line-hi)' },
+      h('div', { class: 'card-head' }, h('h2', {}, icon('sun'), `Tomorrow · ${tomorrow.label}`), h('span', { class: 'spacer' }),
+        h('a', { href: '#/automations', class: 'small' }, 'Bedtime briefing settings')),
+      tCount ? h('div', { class: 'muted small' }, `${tomorrow.events.length} event${tomorrow.events.length === 1 ? '' : 's'} · ${tomorrow.tasksDue.length} due · ${tomorrow.reminders.length} reminder${tomorrow.reminders.length === 1 ? '' : 's'}`)
+        : h('div', { class: 'row' }, h('span', { class: 'muted small', style: 'flex:1' }, 'Nothing planned for tomorrow yet.'),
+          h('button', { class: 'btn sm', onclick: () => eventForm(null, reload, new Date(Date.now() + 86400e3).toISOString()) }, icon('plus'), 'Plan tomorrow'))),
+    h('div', { class: 'card' }, h('h2', {}, icon('cal'), 'Next 3 weeks'),
+      byDay.size ? [...byDay].map(([day, its]) => h('div', { style: 'margin-bottom:14px' }, h('div', { class: 'eyebrow', style: 'margin-bottom:4px' }, day),
+        h('div', { class: 'list' }, its.map((it) => h('div', { class: 'item' },
+          h('span', { class: 'muted small', style: 'width:140px;flex:none;white-space:nowrap' }, timeFmt.format(new Date(it.at)) + (it.end ? '–' + timeFmt.format(new Date(it.end)) : '')),
+          h('div', { class: 'item-body' }, h('div', { class: 'item-title' }, it.title), it.ev?.location ? h('div', { class: 'dim' }, it.ev.location) : null),
+          h('span', { class: `pill ${it.kind === 'Deadline' ? 'warn' : it.kind === 'Event' ? 'ok' : 'info'}` }, it.kind),
+          it.ev ? h('div', { class: 'item-actions' },
+            h('button', { class: 'icon-btn', 'aria-label': 'Edit event', onclick: () => eventForm(it.ev, reload) }, icon('edit')),
+            h('button', { class: 'icon-btn', 'aria-label': 'Delete event', onclick: () => confirmDialog(`Delete "${it.ev.title}"?`, 'This removes the event from your calendar.', async () => { await api(`/events/${it.ev.id}`, { method: 'DELETE' }); toast('Event deleted.'); reload(); }) }, icon('trash'))) : null)))))
+        : emptyState('cal', 'Nothing scheduled', 'Add events, give tasks due dates, or tell JARVIS: "I have a dentist appointment tomorrow at 4pm."')),
   );
 };
 
@@ -694,22 +805,73 @@ views.documents = async (root) => {
 };
 
 views.automations = async (root) => {
-  const planned = [
-    ['Morning briefing', 'Emails, calendar, priorities and news at your chosen start time.'],
-    ['Midday check-in', 'Completed vs pending, delays, new messages, reprioritized plan.'],
-    ['End-of-day wrap-up', 'Report, carry-forward tasks, tomorrow\'s priorities, manager update draft.'],
-    ['Weekly review', 'Achievements, blockers, deadlines and next week\'s priorities.'],
-    ['Deadline notifications', 'Alerts ahead of task due dates.'],
-  ];
-  fill(root, 
-    h('div', { class: 'notice info' }, icon('auto'), h('div', {}, h('strong', {}, 'Automations arrive in Phase 7. '),
-      'Nothing is scheduled yet. Each workflow will need your schedule, time zone and permissions confirmed before it runs. Reminders already fire automatically.')),
-    h('div', { class: 'card section-gap' }, h('h2', {}, icon('auto'), 'Planned workflows'),
-      h('div', { class: 'list' }, planned.map(([n, dsc]) => h('div', { class: 'item' },
-        h('div', { class: 'item-body' }, h('div', { class: 'item-title' }, n), h('div', { class: 'small muted' }, dsc)),
-        h('span', { class: 'pill' }, 'not scheduled'))))),
+  const [list, wa] = await Promise.all([api('/automations'), Promise.resolve(integ('whatsapp'))]);
+  const reload = () => route();
+  const save = async (id, body) => {
+    try { await api(`/automations/${id}`, { method: 'PATCH', body }); toast('Saved.'); reload(); } catch (err) { toast(err.message, 'err'); }
+  };
+  const runPill = (r) => r ? h('span', { class: `pill ${r.status === 'success' ? 'ok' : r.status === 'running' ? 'info' : r.status === 'partial' ? 'warn' : 'err'}` }, r.status) : null;
+  fill(root,
+    !wa?.connected ? h('div', { class: 'notice', style: 'margin-bottom:16px' }, icon('shield'), h('div', {},
+      h('strong', {}, 'WhatsApp is not configured yet. '), 'Briefings still arrive in the JARVIS notification center; WhatsApp delivery will show as failed until you add ',
+      h('code', {}, (wa?.requires || []).join(', ')), ' to .env. Guide: ', h('code', {}, 'docs/SETUP-WHATSAPP.md'), '.')) : null,
+    h('div', { class: 'stack' }, list.map((a) => {
+      const time = h('input', { class: 'input', type: 'time', value: a.run_at, style: 'width:130px' });
+      const chk = (c, label) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' },
+        h('input', { type: 'checkbox', checked: a.channels.includes(c), 'data-ch': c }), label);
+      const chans = h('div', { class: 'row' }, chk('in_app', 'In-app'), chk('whatsapp', 'WhatsApp'));
+      return h('div', { class: 'card' },
+        h('div', { class: 'card-head' },
+          h('h2', {}, icon('auto'), a.name), h('span', { class: 'spacer' }),
+          h('span', { class: `pill ${a.enabled ? 'ok' : ''}` }, a.enabled ? `on · daily ${a.run_at}` : 'off')),
+        h('p', { class: 'muted small', style: 'margin-top:0' }, a.description),
+        h('div', { class: 'row', style: 'gap:16px' },
+          h('label', { class: 'field' }, `Time (${a.timezone})`, time),
+          h('div', { class: 'field' }, 'Deliver to', chans),
+          h('span', { style: 'flex:1' }),
+          h('button', {
+            class: 'btn', onclick: async () => {
+              const { text } = await api(`/automations/${a.id}/preview`);
+              openModal([h('h2', {}, icon('auto'), 'Preview'), h('div', { class: 'preview' }, text), h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, 'Close'))]);
+            },
+          }, 'Preview'),
+          h('button', {
+            class: 'btn', onclick: async (e) => {
+              e.target.disabled = true;
+              try {
+                const r = await api(`/automations/${a.id}/run`, { method: 'POST' });
+                toast(r.status === 'success' ? 'Sent.' : `${r.status}: ${r.error}`, r.status === 'success' ? '' : 'err');
+              } catch (err) { toast(err.message, 'err'); }
+              reload(); refreshChrome();
+            },
+          }, icon('send'), 'Send now'),
+          h('button', {
+            class: 'btn primary', onclick: () => {
+              const channels = [...chans.querySelectorAll('input:checked')].map((i) => i.dataset.ch);
+              save(a.id, { run_at: time.value, channels });
+            },
+          }, 'Save'),
+          h('button', { class: `btn ${a.enabled ? 'danger' : ''}`, onclick: () => save(a.id, { enabled: !a.enabled }) }, a.enabled ? 'Turn off' : 'Turn on')),
+        a.lastRun ? h('div', { class: 'dim', style: 'margin-top:12px' }, 'Last run: ', fmt.dt(a.lastRun.started_at), ' (', a.lastRun.trigger, ') ', runPill(a.lastRun),
+          a.lastRun.error ? h('div', { class: 'small', style: 'color:var(--err);margin-top:4px' }, a.lastRun.error) : null,
+          ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); showRuns(a); } }, 'History')) : h('div', { class: 'dim', style: 'margin-top:12px' }, 'Has not run yet.'));
+    })),
+    h('div', { class: 'notice info section-gap' }, icon('auto'), h('div', {},
+      'Each automation runs at most once per day (also after a restart). If JARVIS was off at the scheduled time, it catches up within 3 hours. ',
+      'Midday check-in, end-of-day wrap-up and weekly review are next on the roadmap.')),
   );
 };
+
+async function showRuns(a) {
+  const runs = await api(`/automations/${a.id}/runs`);
+  openModal([
+    h('h2', {}, icon('auto'), `${a.name} — history`),
+    h('table', { class: 'tbl section-gap' }, h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Trigger'), h('th', {}, 'Status'))),
+      h('tbody', {}, runs.map((r) => h('tr', {}, h('td', { class: 'small' }, fmt.dt(r.started_at), r.error ? h('div', { class: 'dim' }, r.error) : null), h('td', { class: 'small' }, r.trigger),
+        h('td', {}, h('span', { class: `pill ${r.status === 'success' ? 'ok' : r.status === 'partial' ? 'warn' : 'err'}` }, r.status)))))),
+    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, 'Close')),
+  ]);
+}
 
 views.memory = async (root) => {
   const q = sessionStorage.getItem('jarvis.memQ') || '';
@@ -790,15 +952,21 @@ views.settings = async (root) => {
       h('table', { class: 'tbl' }, h('thead', {}, h('tr', {}, h('th', {}, 'Integration'), h('th', {}, 'Status'), h('th', { class: 'hide-sm' }, 'Needs'))),
         h('tbody', {}, s.integrations.map((i) => h('tr', {},
           h('td', {}, h('div', { class: 'item-title' }, i.name), h('div', { class: 'dim' }, i.description)),
-          h('td', {}, h('span', { class: `pill ${i.connected ? 'ok' : i.status === 'not_configured' ? 'err' : ''}` }, i.connected ? 'online' : i.status === 'not_implemented' ? `planned · phase ${i.phase}` : 'needs config')),
-          h('td', { class: 'hide-sm small muted' }, i.requires.join(', ') || '—')))))),
+          h('td', {}, h('span', { class: `pill ${i.connected ? 'ok' : i.status === 'not_configured' ? 'err' : ''}` }, i.connected ? 'online' : i.status === 'not_implemented' ? `planned · phase ${i.phase}` : i.status === 'needs_authorization' ? 'connect' : 'needs config')),
+          h('td', { class: 'hide-sm small muted' }, i.account ? h('div', {}, i.account) : null, i.requires.join(', ') || (i.account ? '' : '—'),
+            i.id === 'email' && i.connected ? h('div', { style: 'margin-top:6px' }, h('button', {
+              class: 'btn sm danger', onclick: () => confirmDialog('Disconnect Gmail?', 'JARVIS will revoke its Google access and delete the stored token. Your email is not affected.', async () => { await api('/integrations/google/disconnect', { method: 'POST' }); toast('Gmail disconnected.'); refreshAll(); }, 'Disconnect'),
+            }, 'Disconnect')) : null,
+            i.id === 'whatsapp' && i.connected ? h('div', { style: 'margin-top:6px' }, h('button', {
+              class: 'btn sm', onclick: async (e) => { e.target.disabled = true; try { await api('/integrations/whatsapp/test', { method: 'POST' }); toast('Test message sent to your WhatsApp.'); } catch (err) { toast(err.message, 'err'); } e.target.disabled = false; },
+            }, 'Send test message')) : null)))))),
   );
 };
 
 // ───────────────────────── router ─────────────────────────
 let routeToken = 0;
 async function route() {
-  const [, name = 'home', sub] = (location.hash || '#/home').split('/');
+  const [, name = 'home', sub] = (location.hash || '#/home').split('?')[0].split('/');
   if (name === 'approvals' && sub) { showApproval(sub).catch((e) => toast(e.message, 'err')); location.hash = '#/home'; return; }
   const view = views[name] ? name : 'home';
   renderNav(view);

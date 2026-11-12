@@ -31,8 +31,6 @@ export function createRouter() {
 
 export async function readJson(req, limit = 1_000_000) {
   if (!['POST', 'PATCH', 'PUT'].includes(req.method)) return {};
-  const type = req.headers['content-type'] || '';
-  if (!type.includes('application/json')) throw new HttpError(415, 'Content-Type must be application/json.');
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
@@ -41,7 +39,9 @@ export async function readJson(req, limit = 1_000_000) {
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString('utf8');
-  if (!text) return {};
+  if (!text) return {}; // body-less action POSTs (confirm, cancel, run) are fine
+  const type = req.headers['content-type'] || '';
+  if (!type.includes('application/json')) throw new HttpError(415, 'Content-Type must be application/json.');
   try {
     const v = JSON.parse(text);
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error();

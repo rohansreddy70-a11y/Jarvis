@@ -38,3 +38,26 @@ test('CRUD over HTTP, validation and security headers', async () => {
     assert.equal((await fetch(`${base}/..%2f..%2fpackage.json`)).status !== 500, true);
   });
 });
+
+test('Google OAuth callback bypasses token auth but rejects forged state with a redirect', async () => {
+  await withServer({ JARVIS_ACCESS_TOKEN: 'a-long-test-token-1234567890', GOOGLE_CLIENT_ID: 'x', GOOGLE_CLIENT_SECRET: 'y' }, async (base) => {
+    const res = await fetch(`${base}/api/integrations/google/callback?code=abc&state=forged`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.match(res.headers.get('location'), /^\/#\/email\?error=/);
+    assert.equal((await fetch(`${base}/api/email/messages`)).status, 401, 'other routes still need the token');
+  });
+});
+
+test('body-less action POSTs work (approval confirm, reminder cancel)', async () => {
+  await withServer({}, async (base, app) => {
+    const t = app.services.tasks.create({ title: 'Temp' });
+    const a = app.services.approvals.request({ actionType: 'task.delete', summary: 'Delete', payload: { id: t.id } });
+    const res = await fetch(`${base}/api/approvals/${a.id}/confirm`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).status, 'executed');
+    const r = app.services.reminders.create({ message: 'x', remind_at: new Date(Date.now() + 3600e3).toISOString() });
+    assert.equal((await fetch(`${base}/api/reminders/${r.id}/cancel`, { method: 'POST' })).status, 200);
+    const bad = await fetch(`${base}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'title=x' });
+    assert.equal(bad.status, 415, 'non-JSON bodies are still rejected');
+  });
+});

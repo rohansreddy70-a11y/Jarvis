@@ -1,19 +1,20 @@
 // REST API. All routes are under /api and require the access token when one is configured.
 import { createRouter, HttpError } from './router.js';
 import { publicStatus } from '../config.js';
-import { integrationStatus } from '../integrations/registry.js';
 import { str } from '../services/validate.js';
 
 export function createApi(app) {
   const { config, services: s, engine } = app;
   const r = createRouter();
+  const integrationStatus = () => s.integrations.status();
+  const { google, whatsapp } = s.integrations;
   const user = 'user';
 
   // ── System ──
   r.get('/api/health', () => ({ ok: true }));
   r.get('/api/status', () => ({
     ...publicStatus(config),
-    integrations: integrationStatus(config),
+    integrations: integrationStatus(),
     counts: {
       pendingApprovals: s.approvals.pendingCount(),
       unreadNotifications: s.notifications.unreadCount(),
@@ -27,9 +28,11 @@ export function createApi(app) {
       reminders: s.reminders.list().slice(0, 8),
       drafts: s.drafts.list().slice(0, 5),
       approvals: s.approvals.list({ status: 'pending' }),
-      integrations: integrationStatus(config),
+      integrations: integrationStatus(),
       activity: s.activity.list({ limit: 8 }),
       memoryCount: s.memory.list({ limit: 500 }).length,
+      today: s.schedule.forDay('today'),
+      tomorrow: s.schedule.forDay('tomorrow'),
     };
   });
 
@@ -98,7 +101,60 @@ export function createApi(app) {
   r.post('/api/notifications/:id/read', ({ params }) => { s.notifications.markRead(params.id); return { ok: true }; });
   r.get('/api/activity', ({ query }) => s.activity.list({ limit: query.get('limit'), type: query.get('type') || undefined }));
 
-  r.get('/api/integrations', () => integrationStatus(config));
+  r.get('/api/integrations', () => integrationStatus());
+
+  // ── Calendar (built-in) ──
+  r.get('/api/schedule', ({ query }) => s.schedule.forDay(query.get('day') || 'today'));
+  r.get('/api/events', ({ query }) => {
+    const from = query.get('from') ? new Date(query.get('from')) : new Date(Date.now() - 86400e3);
+    const to = query.get('to') ? new Date(query.get('to')) : new Date(from.getTime() + 31 * 86400e3);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) throw new HttpError(400, 'from/to must be ISO dates.');
+    return s.events.between(from, to);
+  });
+  r.post('/api/events', ({ body }) => s.events.create(body, user));
+  r.patch('/api/events/:id', ({ params, body }) => s.events.update(params.id, body, user));
+  r.delete('/api/events/:id', ({ params }) => s.events.remove(params.id, user));
+
+  // ── Automations ──
+  r.get('/api/automations', () => s.automations.list());
+  r.patch('/api/automations/:id', ({ params, body }) => s.automations.update(params.id, body));
+  r.get('/api/automations/:id/runs', ({ params }) => s.automations.runs(params.id));
+  r.get('/api/automations/:id/preview', ({ params }) => ({ text: s.automations.preview(params.id) }));
+  r.post('/api/automations/:id/run', async ({ params }) => s.automations.runNow(params.id));
+
+  // ── Gmail ──
+  r.get('/api/integrations/google/auth-url', () => ({ url: google.authUrl(), redirectUri: google.redirectUri }));
+  // Browser redirect from Google: exempt from bearer auth, protected by one-time state.
+  r.get('/api/integrations/google/callback', async ({ query }) => {
+    try {
+      const acct = await google.handleCallback({ code: query.get('code'), state: query.get('state'), error: query.get('error') });
+      s.activity.log('integration.connected', `Gmail connected${acct?.email ? ' (' + acct.email + ')' : ''}`, { actor: user });
+      return { __redirect: '/#/email?connected=1' };
+    } catch (err) {
+      s.activity.log('integration.error', `Gmail connection failed: ${err.message}`);
+      return { __redirect: `/#/email?error=${encodeURIComponent(err.message)}` };
+    }
+  });
+  r.post('/api/integrations/google/disconnect', async () => {
+    await google.disconnect();
+    s.activity.log('integration.disconnected', 'Gmail disconnected', { actor: user });
+    return { ok: true };
+  });
+  r.get('/api/email/messages', async ({ query }) => {
+    if (!google.connected) throw new HttpError(409, 'Gmail is not connected.');
+    return google.listMessages({ query: query.get('q') || 'in:inbox', max: query.get('max') || 20 });
+  });
+  r.get('/api/email/messages/:id', async ({ params }) => {
+    if (!google.connected) throw new HttpError(409, 'Gmail is not connected.');
+    return google.getMessage(params.id);
+  });
+
+  // ── WhatsApp ──
+  r.post('/api/integrations/whatsapp/test', async () => {
+    const id = await whatsapp.notifyOwner('✅ JARVIS test message. WhatsApp notifications are working.').catch((err) => { throw new HttpError(502, err.message); });
+    s.activity.log('whatsapp.test', 'WhatsApp test message sent to owner', { id });
+    return { ok: true, id };
+  });
 
   return r;
 }
