@@ -55,6 +55,7 @@ export function localParts(date, timeZone) {
 export function dayBounds(date, timeZone, offsetDays = 0) {
   let { start, end } = localDayBounds(date, timeZone);
   for (let i = 0; i < offsetDays; i++) ({ start, end } = localDayBounds(new Date(end.getTime() + 12 * 3600e3), timeZone));
+  for (let i = 0; i > offsetDays; i--) ({ start, end } = localDayBounds(new Date(start.getTime() - 12 * 3600e3), timeZone));
   return { start, end, dateKey: localParts(new Date(start.getTime() + 12 * 3600e3), timeZone).dateKey };
 }
 
@@ -68,4 +69,19 @@ export function boundsForDateKey(dateKey, timeZone) {
 
 export function formatTime(date, timeZone) {
   return new Intl.DateTimeFormat('en-IN', { timeZone, hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
+// ISO weekday in a time zone: 1 = Monday … 7 = Sunday.
+export function localWeekday(date, timeZone) {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(date);
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(wd) + 1;
+}
+
+// Start of the local week (Monday 00:00) containing `date`.
+export function weekStart(date, timeZone) {
+  return dayBounds(date, timeZone, -(localWeekday(date, timeZone) - 1));
+}
+
+export function formatDay(date, timeZone) {
+  return new Intl.DateTimeFormat('en-IN', { timeZone, weekday: 'long', day: 'numeric', month: 'long' }).format(date);
 }

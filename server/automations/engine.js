@@ -1,14 +1,19 @@
 // Automation engine: time-zone-aware daily workflows with enable/disable,
 // configurable time and channels, execution history, failure notifications,
 // and duplicate-execution prevention (UNIQUE(automation_id, run_key)).
-import { nowIso, localParts, ValidationError } from '../lib/time.js';
+import { nowIso, localParts, localWeekday, ValidationError } from '../lib/time.js';
 import { NotFoundError } from '../services/validate.js';
 
 const CATCH_UP_MINUTES = 180; // if JARVIS was off at the scheduled time, still run within 3h
 export const CHANNELS = ['in_app', 'whatsapp'];
 
 export function createAutomationEngine({ db, config, services, whatsapp }) {
-  const { activity, notifications, schedule } = services;
+  const { activity, notifications, schedule, reports } = services;
+  const ALL_DAYS = [1, 2, 3, 4, 5, 6, 7];
+  const report = (type) => async () => {
+    const r = await reports.generate(type, { actor: 'automation' });
+    return { text: r.content, summary: r.data.summary, link: `#/reports/${r.id}` };
+  };
 
   const DEFINITIONS = {
     bedtime_schedule: {
@@ -29,12 +34,42 @@ export function createAutomationEngine({ db, config, services, whatsapp }) {
       build: () => schedule.toText(schedule.forDay('today'), "☀️ Today's schedule"),
       link: '#/today',
     },
+    midday_checkin: {
+      name: 'Midday check-in',
+      description: 'Done vs pending, delays, upcoming deadlines, potential problems, new important emails, schedule changes, and a suggested order for the rest of the day.',
+      defaultTime: '13:00',
+      defaultEnabled: true,
+      defaultChannels: ['in_app'],
+      defaultDays: [1, 2, 3, 4, 5],
+      report: 'midday',
+      build: report('midday'),
+    },
+    end_of_day: {
+      name: 'End-of-day wrap-up',
+      description: 'Work completed, achievements, pending and delayed items, important conversations, carry-forwards, tomorrow\'s meetings and priorities — plus a manager status update saved as a draft for your approval.',
+      defaultTime: '18:30',
+      defaultEnabled: true,
+      defaultChannels: ['in_app'],
+      defaultDays: [1, 2, 3, 4, 5],
+      report: 'end_of_day',
+      build: report('end_of_day'),
+    },
+    weekly_review: {
+      name: 'Weekly review',
+      description: 'Achievements, projects progressed, outstanding work, blockers, upcoming deadlines, decisions, next week\'s priorities and organization suggestions.',
+      defaultTime: '17:30',
+      defaultEnabled: true,
+      defaultChannels: ['in_app'],
+      defaultDays: [5],
+      report: 'weekly',
+      build: report('weekly'),
+    },
   };
 
   // Seed rows once; afterwards the user's settings win.
   for (const [id, d] of Object.entries(DEFINITIONS)) {
-    db.prepare('INSERT OR IGNORE INTO automations (id, enabled, run_at, channels, updated_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, d.defaultEnabled ? 1 : 0, validTime(d.defaultTime) ? d.defaultTime : '21:30', JSON.stringify(d.defaultChannels), nowIso());
+    db.prepare('INSERT OR IGNORE INTO automations (id, enabled, run_at, channels, days, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, d.defaultEnabled ? 1 : 0, validTime(d.defaultTime) ? d.defaultTime : '21:30', JSON.stringify(d.defaultChannels), JSON.stringify(d.defaultDays || ALL_DAYS), nowIso());
   }
 
   const row = (id) => {
@@ -47,7 +82,7 @@ export function createAutomationEngine({ db, config, services, whatsapp }) {
     const last = db.prepare('SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY id DESC LIMIT 1').get(r.id) || null;
     return {
       id: r.id, name: d.name, description: d.description, enabled: Boolean(r.enabled), run_at: r.run_at,
-      timezone: config.timezone, channels: JSON.parse(r.channels), lastRun: last,
+      timezone: config.timezone, channels: JSON.parse(r.channels), days: JSON.parse(r.days), report: d.report || null, lastRun: last,
     };
   };
 
@@ -61,9 +96,11 @@ export function createAutomationEngine({ db, config, services, whatsapp }) {
     let output = '';
     const results = [];
     try {
-      output = d.build();
+      const built = await d.build();
+      const { text, summary, link } = typeof built === 'string' ? { text: built, summary: built, link: d.link } : built;
+      output = text;
       if (channels.includes('in_app')) {
-        notifications.create({ title: d.name, body: output, level: 'info', link: d.link });
+        notifications.create({ title: d.name, body: summary, level: 'info', link });
         results.push({ channel: 'in_app', ok: true });
       }
       if (channels.includes('whatsapp')) {
@@ -105,21 +142,30 @@ export function createAutomationEngine({ db, config, services, whatsapp }) {
         }
         channels = [...new Set(input.channels)];
       }
-      db.prepare('UPDATE automations SET enabled = ?, run_at = ?, channels = ?, updated_at = ? WHERE id = ?')
-        .run(enabled, runAt, JSON.stringify(channels), nowIso(), id);
+      let days = JSON.parse(r.days);
+      if (input.days !== undefined) {
+        if (!Array.isArray(input.days) || !input.days.length || input.days.some((d) => !ALL_DAYS.includes(d))) {
+          throw new ValidationError('days must be a non-empty list of weekday numbers 1 (Mon) – 7 (Sun).');
+        }
+        days = [...new Set(input.days)].sort();
+      }
+      db.prepare('UPDATE automations SET enabled = ?, run_at = ?, channels = ?, days = ?, updated_at = ? WHERE id = ?')
+        .run(enabled, runAt, JSON.stringify(channels), JSON.stringify(days), nowIso(), id);
       activity.log('automation.updated', `${DEFINITIONS[id].name}: ${enabled ? `on at ${runAt}` : 'off'} (${channels.join(', ')})`, { id });
       return view(row(id));
     },
     runs: (id, limit = 30) => { row(id); return db.prepare('SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY id DESC LIMIT ?').all(id, limit); },
     runNow: (id) => { row(id); return execute(id, `manual-${Date.now()}`, 'manual'); },
-    preview: (id) => { row(id); return DEFINITIONS[id].build(); },
+    // Preview without side effects. Reports are stored when generated, so they have no preview.
+    preview: async (id) => { row(id); return DEFINITIONS[id].report ? null : DEFINITIONS[id].build(); },
     // Called every tick. Runs each enabled automation at most once per local day.
     async tick(now = new Date()) {
       const { dateKey, minutes } = localParts(now, config.timezone);
+      const weekday = localWeekday(now, config.timezone);
       const ran = [];
       for (const id of Object.keys(DEFINITIONS)) {
         const r = row(id);
-        if (!r.enabled) continue;
+        if (!r.enabled || !JSON.parse(r.days).includes(weekday)) continue;
         const [hh, mm] = r.run_at.split(':').map(Number);
         const due = hh * 60 + mm;
         if (minutes >= due && minutes - due <= CATCH_UP_MINUTES) {

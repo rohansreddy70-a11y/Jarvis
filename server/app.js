@@ -17,6 +17,7 @@ import { createScheduleService } from './services/schedule.js';
 import { createGoogle } from './integrations/google.js';
 import { createWhatsApp } from './integrations/whatsapp.js';
 import { createAutomationEngine } from './automations/engine.js';
+import { createReportService } from './services/reports.js';
 
 export function createApp(config, { provider, fetchImpl } = {}) {
   const db = openDatabase(config.dbPath);
@@ -42,6 +43,7 @@ export function createApp(config, { provider, fetchImpl } = {}) {
   const whatsapp = createWhatsApp(config.env, net);
   const status = () => integrationStatus(config, { google, whatsapp });
   services.integrations = { google, whatsapp, status };
+  services.reports = createReportService(services, config);
   services.automations = createAutomationEngine({ db, config, services, whatsapp });
 
   // ── Approval executors: the ONLY code paths that perform sensitive actions. ──

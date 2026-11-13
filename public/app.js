@@ -135,6 +135,7 @@ const NAV = [
   ['tasks', 'Tasks', 'list'],
   ['research', 'Research', 'search'],
   ['documents', 'Documents', 'file'],
+  ['reports', 'Reports', 'report'],
   ['automations', 'Automations', 'auto'],
   ['memory', 'Memory', 'brain'],
   ['activity', 'Activity', 'pulse'],
@@ -820,21 +821,30 @@ views.automations = async (root) => {
       const chk = (c, label) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' },
         h('input', { type: 'checkbox', checked: a.channels.includes(c), 'data-ch': c }), label);
       const chans = h('div', { class: 'row' }, chk('in_app', 'In-app'), chk('whatsapp', 'WhatsApp'));
+      const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const days = h('div', { class: 'row', style: 'gap:4px' }, DAYS.map((d, i) => h('button', {
+        type: 'button', class: `tab${a.days.includes(i + 1) ? ' active' : ''}`, 'data-day': i + 1, 'aria-pressed': String(a.days.includes(i + 1)),
+        style: 'padding:4px 9px', onclick: (e) => { const on = e.currentTarget.classList.toggle('active'); e.currentTarget.setAttribute('aria-pressed', String(on)); },
+      }, d)));
+      const schedLabel = a.days.length === 7 ? 'daily' : a.days.length === 5 && !a.days.includes(6) && !a.days.includes(7) ? 'weekdays' : a.days.map((d) => DAYS[d - 1]).join(', ');
       return h('div', { class: 'card' },
         h('div', { class: 'card-head' },
           h('h2', {}, icon('auto'), a.name), h('span', { class: 'spacer' }),
-          h('span', { class: `pill ${a.enabled ? 'ok' : ''}` }, a.enabled ? `on · daily ${a.run_at}` : 'off')),
+          h('span', { class: `pill ${a.enabled ? 'ok' : ''}` }, a.enabled ? `on · ${schedLabel} ${a.run_at}` : 'off')),
         h('p', { class: 'muted small', style: 'margin-top:0' }, a.description),
         h('div', { class: 'row', style: 'gap:16px' },
           h('label', { class: 'field' }, `Time (${a.timezone})`, time),
+          h('div', { class: 'field' }, 'Days', days),
           h('div', { class: 'field' }, 'Deliver to', chans),
           h('span', { style: 'flex:1' }),
-          h('button', {
-            class: 'btn', onclick: async () => {
-              const { text } = await api(`/automations/${a.id}/preview`);
-              openModal([h('h2', {}, icon('auto'), 'Preview'), h('div', { class: 'preview' }, text), h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, 'Close'))]);
-            },
-          }, 'Preview'),
+          a.report
+            ? h('a', { class: 'btn', href: '#/reports' }, icon('report'), 'Reports')
+            : h('button', {
+              class: 'btn', onclick: async () => {
+                const { text } = await api(`/automations/${a.id}/preview`);
+                openModal([h('h2', {}, icon('auto'), 'Preview'), h('div', { class: 'preview' }, text), h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, 'Close'))]);
+              },
+            }, 'Preview'),
           h('button', {
             class: 'btn', onclick: async (e) => {
               e.target.disabled = true;
@@ -848,7 +858,8 @@ views.automations = async (root) => {
           h('button', {
             class: 'btn primary', onclick: () => {
               const channels = [...chans.querySelectorAll('input:checked')].map((i) => i.dataset.ch);
-              save(a.id, { run_at: time.value, channels });
+              const dayList = [...days.querySelectorAll('.tab.active')].map((b) => Number(b.dataset.day));
+              save(a.id, { run_at: time.value, channels, days: dayList });
             },
           }, 'Save'),
           h('button', { class: `btn ${a.enabled ? 'danger' : ''}`, onclick: () => save(a.id, { enabled: !a.enabled }) }, a.enabled ? 'Turn off' : 'Turn on')),
@@ -857,8 +868,8 @@ views.automations = async (root) => {
           ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); showRuns(a); } }, 'History')) : h('div', { class: 'dim', style: 'margin-top:12px' }, 'Has not run yet.'));
     })),
     h('div', { class: 'notice info section-gap' }, icon('auto'), h('div', {},
-      'Each automation runs at most once per day (also after a restart). If JARVIS was off at the scheduled time, it catches up within 3 hours. ',
-      'Midday check-in, end-of-day wrap-up and weekly review are next on the roadmap.')),
+      'Each automation runs at most once per scheduled day (also after a restart). If JARVIS was off at the scheduled time, it catches up within 3 hours. ',
+      'Reports never change or remove tasks; manager updates are saved as drafts and only sent if you approve them.')),
   );
 };
 
@@ -872,6 +883,74 @@ async function showRuns(a) {
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, 'Close')),
   ]);
 }
+
+const REPORT_META = {
+  midday: { title: 'Midday check-in', icon: 'sun', blurb: 'Done vs pending, delays, deadlines, problems, new important email, schedule changes, and a suggested order for the rest of the day.' },
+  end_of_day: { title: 'End-of-day wrap-up', icon: 'clock', blurb: 'Completed work, achievements, delays, carry-forwards, tomorrow\'s meetings and priorities — plus a manager update draft.' },
+  weekly: { title: 'Weekly review', icon: 'report', blurb: 'Achievements, project progress, blockers, deadlines, decisions, next week\'s priorities and organization suggestions.' },
+};
+
+async function showReport(id) {
+  const r = await api(`/reports/${id}`);
+  openModal([
+    h('h2', {}, icon(REPORT_META[r.type].icon), r.title),
+    h('p', { class: 'dim' }, `Generated ${fmt.dt(r.created_at)} · ${r.data.summary || ''}`),
+    h('div', { class: 'preview', style: 'max-height:58vh' }, r.content),
+    h('div', { class: 'modal-actions', style: 'flex-wrap:wrap' },
+      h('button', { class: 'btn', onclick: closeModal }, 'Close'),
+      r.draft_id ? h('a', { class: 'btn', href: '#/email', onclick: closeModal }, icon('mail'), 'Review manager update') : null,
+      h('button', {
+        class: 'btn primary', onclick: () => {
+          closeModal();
+          sessionStorage.setItem('jarvis.pending', `Here is my ${REPORT_META[r.type].title.toLowerCase()} (report #${r.id}). Give me your 3 most important takeaways and what I should do next. Do not change any tasks unless I ask.\n\n${r.content}`);
+          state.conversationId = null; location.hash = '#/chat';
+        },
+      }, icon('spark'), 'Discuss with JARVIS')),
+  ]);
+}
+
+views.reports = async (root) => {
+  const [list, automations] = await Promise.all([api('/reports'), api('/automations')]);
+  const autoFor = Object.fromEntries(automations.filter((a) => a.report).map((a) => [a.report, a]));
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const when = (a) => !a ? '' : !a.enabled ? 'Automatic delivery off'
+    : `Automatic: ${a.days.length === 7 ? 'daily' : a.days.length === 5 && !a.days.includes(6) && !a.days.includes(7) ? 'weekdays' : a.days.map((d) => DAYS[d - 1]).join(', ')} at ${a.run_at}`;
+  const generate = async (type, btn) => {
+    btn.disabled = true;
+    try {
+      const r = await api('/reports/generate', { method: 'POST', body: { type } });
+      await showReport(r.id);
+      if (r.draft_id) toast('Manager update saved as a draft. Nothing was sent.');
+    } catch (err) { toast(err.message, 'err'); }
+    btn.disabled = false;
+    refreshChrome();
+    const fresh = await api('/reports');
+    renderHistory(fresh);
+  };
+  const history = h('div', { class: 'card section-gap' });
+  function renderHistory(items) {
+    fill(history, h('h2', {}, icon('report'), 'History'),
+      items.length ? h('div', { class: 'list' }, items.map((r) => h('div', { class: 'item', style: 'cursor:pointer', onclick: () => showReport(r.id) },
+        icon(REPORT_META[r.type].icon),
+        h('div', { class: 'item-body' }, h('div', { class: 'item-title' }, r.title), h('div', { class: 'item-meta' }, fmt.dt(r.created_at), r.data.summary ? ['·', r.data.summary] : null)),
+        r.draft_id ? h('span', { class: 'pill info' }, 'draft update') : null)))
+        : emptyState('report', 'No reports yet', 'Generate one above, or wait for the automatic schedule.'));
+  }
+  renderHistory(list);
+  fill(root,
+    h('div', { class: 'grid g3' }, Object.entries(REPORT_META).map(([type, m]) => {
+      const last = list.find((r) => r.type === type);
+      const btn = h('button', { class: 'btn primary' }, icon('spark'), 'Generate now');
+      btn.onclick = () => generate(type, btn);
+      return h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0' }, icon(m.icon), m.title),
+        h('p', { class: 'muted small', style: 'margin:0;flex:1' }, m.blurb),
+        h('div', { class: 'dim' }, when(autoFor[type]), ' · ', h('a', { href: '#/automations' }, 'change')),
+        h('div', { class: 'row' }, btn, last ? h('button', { class: 'btn', onclick: () => showReport(last.id) }, 'Latest') : null));
+    })),
+    history,
+  );
+};
 
 views.memory = async (root) => {
   const q = sessionStorage.getItem('jarvis.memQ') || '';
@@ -968,6 +1047,8 @@ let routeToken = 0;
 async function route() {
   const [, name = 'home', sub] = (location.hash || '#/home').split('?')[0].split('/');
   if (name === 'approvals' && sub) { showApproval(sub).catch((e) => toast(e.message, 'err')); location.hash = '#/home'; return; }
+  if (name === 'reports' && sub) { location.hash = '#/reports'; setTimeout(() => showReport(sub).catch((e) => toast(e.message, 'err')), 300); return; }
+  closeModal();
   const view = views[name] ? name : 'home';
   renderNav(view);
   const label = NAV.find((n) => n[0] === view)[1];
