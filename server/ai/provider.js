@@ -56,6 +56,37 @@ export function createOpenAICompatibleProvider({ baseUrl, apiKey, model, label =
   };
 }
 
+// Speech-to-text via the OpenAI-compatible /audio/transcriptions endpoint
+// (Groq: whisper-large-v3-turbo, OpenAI: whisper-1). Used for WhatsApp voice notes.
+const STT_MODELS = { groq: 'whisper-large-v3-turbo', openai: 'whisper-1' };
+
+export function createTranscriber(config, { fetchImpl = fetch } = {}) {
+  const model = config.env.AI_TRANSCRIBE_MODEL || STT_MODELS[config.ai.provider];
+  if (!config.ai.configured || !model) return null;
+  return {
+    model,
+    async transcribe(buffer, { filename = 'audio.ogg', mime = 'audio/ogg' } = {}) {
+      const form = new FormData();
+      form.append('file', new Blob([buffer], { type: mime }), filename);
+      form.append('model', model);
+      let res;
+      try {
+        res = await fetchImpl(`${config.ai.baseUrl.replace(/\/$/, '')}/audio/transcriptions`, {
+          method: 'POST',
+          headers: config.ai.apiKey ? { Authorization: `Bearer ${config.ai.apiKey}` } : {},
+          body: form,
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch {
+        throw new ProviderError(`${config.ai.label} transcription could not be reached.`);
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new ProviderError(`${config.ai.label} transcription failed (HTTP ${res.status}).`);
+      return String(data.text || '').trim();
+    },
+  };
+}
+
 export function createProviderFromConfig(config) {
   if (!config.ai.configured) return null;
   return createOpenAICompatibleProvider({

@@ -164,6 +164,34 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_reports_type ON reports(type, id);
   `,
+  // v4 — generated documents
+  `
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    format TEXT NOT NULL CHECK (format IN ('docx','pdf','pptx','xlsx')),
+    filename TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    spec TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
+  `,
+  // v5 — WhatsApp bot inbound log (also de-duplicates Meta's webhook retries)
+  `
+  CREATE TABLE whatsapp_inbound (
+    message_id TEXT PRIMARY KEY,
+    from_number TEXT NOT NULL,
+    type TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received','processed','ignored','failed')),
+    reply TEXT,
+    error TEXT,
+    received_at TEXT NOT NULL,
+    processed_at TEXT
+  );
+  CREATE INDEX idx_wa_inbound_received ON whatsapp_inbound(received_at);
+  `,
 ];
 
 export function openDatabase(dbPath) {

@@ -58,6 +58,10 @@ export function buildConfig(env = process.env) {
   }
   if (accessToken && accessToken.length < 16) warnings.push('JARVIS_ACCESS_TOKEN is short; use at least 32 random characters.');
 
+  if (env.WHATSAPP_APP_SECRET && !accessToken) {
+    warnings.push('The WhatsApp bot requires JARVIS to be reachable from the internet (e.g. via a tunnel). Set JARVIS_ACCESS_TOKEN so the rest of the app is not publicly accessible.');
+  }
+
   let timezone = env.JARVIS_TIMEZONE || 'UTC';
   if (!isValidTimeZone(timezone)) {
     warnings.push(`JARVIS_TIMEZONE "${timezone}" is not a valid IANA time zone; falling back to UTC.`);

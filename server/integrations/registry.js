@@ -4,7 +4,7 @@
 //
 // runtime: { google, whatsapp } live integration objects (optional).
 export function integrationStatus(config, runtime = {}) {
-  const { google, whatsapp } = runtime;
+  const { google, whatsapp, whatsappBot } = runtime;
   const list = [
     {
       id: 'ai', name: 'AI engine', phase: 2,
@@ -31,6 +31,12 @@ export function integrationStatus(config, runtime = {}) {
       requires: whatsapp ? whatsapp.missing : ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_NOTIFY_TO'],
     },
     {
+      id: 'whatsapp_bot', name: 'WhatsApp bot', phase: 5,
+      description: 'Chat with JARVIS from WhatsApp (text and voice notes). Answers only your number.',
+      status: whatsappBot?.configured ? 'configured' : 'not_configured',
+      requires: whatsappBot ? whatsappBot.missing() : ['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN'],
+    },
+    {
       id: 'messaging', name: 'Messaging others', phase: 5,
       description: 'Sending WhatsApp/Slack messages to other people (with approval).',
       status: 'not_implemented', requires: ['Not built yet'],
@@ -47,8 +53,8 @@ export function integrationStatus(config, runtime = {}) {
     },
     {
       id: 'documents', name: 'Document generation', phase: 6,
-      description: 'Word, PDF, Excel and PowerPoint output.',
-      status: 'not_implemented', requires: [],
+      description: 'Word, PDF, Excel and PowerPoint files, built locally (no external service).',
+      status: 'configured', requires: [],
     },
     {
       id: 'notifications', name: 'In-app notifications', phase: 1,

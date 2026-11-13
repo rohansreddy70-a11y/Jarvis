@@ -65,6 +65,7 @@ export function createApprovalService(db, activity, notifications) {
       const res = db.prepare("UPDATE approvals SET status = 'rejected', decided_at = ? WHERE id = ? AND status = 'pending'").run(nowIso(), a.id);
       if (res.changes !== 1) throw new ValidationError(`Approval ${a.id} is already ${a.status}.`);
       activity.log('approval.rejected', `Cancelled: ${a.summary}`, { id: a.id });
+      try { executors.get(a.action_type)?.onReject?.(a.payload); } catch { /* best effort */ }
       return get(a.id);
     },
   };
