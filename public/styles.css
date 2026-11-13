@@ -133,7 +133,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 14px; border-radius: 10px;
-  border: 1px solid var(--line); background: var(--panel-hi); cursor: pointer; font-weight: 500; font-size: 14px; white-space: nowrap;
+  border: 1px solid var(--line); background: var(--panel-hi); cursor: pointer; font-weight: 500; font-size: 14px; white-space: nowrap; text-decoration: none; color: inherit;
 }
 .btn:hover { border-color: var(--line-hi); }
 .btn svg { width: 16px; height: 16px; }

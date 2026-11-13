@@ -148,6 +148,22 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_runs_automation ON automation_runs(automation_id, id);
   `,
+  // v3 — productivity reports, weekday schedules
+  `
+  ALTER TABLE automations ADD COLUMN days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]';
+
+  CREATE TABLE reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK (type IN ('midday','end_of_day','weekly')),
+    period_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    draft_id INTEGER REFERENCES drafts(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_reports_type ON reports(type, id);
+  `,
 ];
 
 export function openDatabase(dbPath) {

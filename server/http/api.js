@@ -119,8 +119,13 @@ export function createApi(app) {
   r.get('/api/automations', () => s.automations.list());
   r.patch('/api/automations/:id', ({ params, body }) => s.automations.update(params.id, body));
   r.get('/api/automations/:id/runs', ({ params }) => s.automations.runs(params.id));
-  r.get('/api/automations/:id/preview', ({ params }) => ({ text: s.automations.preview(params.id) }));
+  r.get('/api/automations/:id/preview', async ({ params }) => ({ text: await s.automations.preview(params.id) }));
   r.post('/api/automations/:id/run', async ({ params }) => s.automations.runNow(params.id));
+
+  // ── Reports ──
+  r.get('/api/reports', ({ query }) => s.reports.list({ type: query.get('type') || undefined }));
+  r.get('/api/reports/:id', ({ params }) => s.reports.get(params.id));
+  r.post('/api/reports/generate', async ({ body }) => s.reports.generate(body.type, { actor: user }));
 
   // ── Gmail ──
   r.get('/api/integrations/google/auth-url', () => ({ url: google.authUrl(), redirectUri: google.redirectUri }));

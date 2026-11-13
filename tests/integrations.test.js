@@ -52,14 +52,15 @@ test('bedtime automation: enabled by default, runs once per day, delivers to Wha
   assert.equal(auto.get('bedtime_schedule').enabled, true);
   assert.equal(auto.get('morning_schedule').enabled, false, 'other automations are off until the user enables them');
 
+  const bedtime = (runs) => runs.filter((r) => r.automation_id === 'bedtime_schedule');
   const before = new Date('2026-11-12T15:59:00Z'); // 21:29 IST
-  assert.equal((await auto.tick(before)).length, 0);
+  assert.equal(bedtime(await auto.tick(before)).length, 0);
   const at = new Date('2026-11-12T16:00:00Z'); // 21:30 IST
-  const [run] = await auto.tick(at);
+  const [run] = bedtime(await auto.tick(at));
   assert.equal(run.status, 'success');
-  assert.equal((await auto.tick(new Date('2026-11-12T16:05:00Z'))).length, 0, 'no duplicate run the same day');
+  assert.equal((await auto.tick(new Date('2026-11-12T16:05:00Z'))).length, 0, 'no duplicate runs the same day');
 
-  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls.length, 1, 'only bedtime goes to WhatsApp by default');
   const sent = JSON.parse(f.calls[0].init.body);
   assert.equal(sent.to, '919000000000');
   assert.equal(sent.type, 'text');

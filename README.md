@@ -15,6 +15,7 @@ A modular, self-hosted personal AI assistant: a dark command-center dashboard, a
 | **Memory** | Long-term, searchable, categorized memory (preferences, writing style, projects, deadlines, decisions…). View, correct, delete. **Refuses credentials.** Kept separate from conversation history. |
 | **Calendar** | Built-in calendar: add events in the app or by chat ("dentist tomorrow at 4pm"). Next-3-weeks agenda with events, deadlines and reminders. |
 | **Bedtime briefing** | Every night (default 21:30 in your time zone) JARVIS sends tomorrow's events, deadlines, reminders and top priorities — in-app and to your WhatsApp. If nothing is planned, it asks you to plan tomorrow. Configurable time/channels, on/off, run history, once-per-day guarantee. |
+| **Reports** | **Midday check-in** (weekdays 13:00): done vs pending, delays, 48-hour deadlines, problems, new important email, schedule changes, suggested order for the rest of the day. **End-of-day wrap-up** (weekdays 18:30): the 8-part daily report plus a manager status update saved as a draft. **Weekly review** (Fridays 17:30): achievements, projects, blockers, deadlines, decisions, next week's priorities, organization suggestions. Built from your data — they never change, remove or send anything. Generate any time from the Reports page or by asking JARVIS. |
 | **Gmail** | Connect with Google sign-in; inbox/unread/important views, read messages, "Summarize with JARVIS", "Draft reply". Sending only after approval. Setup: [docs/SETUP-GMAIL.md](docs/SETUP-GMAIL.md). |
 | **WhatsApp** | Notifications to your own number via Meta WhatsApp Cloud API. Setup: [docs/SETUP-WHATSAPP.md](docs/SETUP-WHATSAPP.md). |
 | **Drafts** | Emails, messages and status updates saved as drafts for review. Never sent automatically. |
@@ -30,7 +31,7 @@ Requires **Node.js 22.5+** (uses the built-in `node:sqlite`). There are **no npm
 cp .env.example .env        # then edit .env — add your AI key
 npm run check-config        # validates config without printing secrets
 npm start                   # http://127.0.0.1:3000
-npm test                    # 27 tests: services, approvals, engine, integrations, automations, HTTP
+npm test                    # 33 tests: services, approvals, engine, integrations, automations, reports, HTTP
 ```
 
 Minimum `.env` for Groq:
@@ -62,7 +63,7 @@ server/
     provider.js         Provider abstraction (OpenAI-compatible client)
     engine.js           System prompt, memory retrieval, tool-calling loop
     tools.js            Tool schemas + handlers (the assistant's "hands")
-  services/             tasks, reminders, memory, drafts, approvals,
+  services/             tasks, reminders, memory, drafts, approvals, reports,
                         conversations, notifications, activity
   automations/
     engine.js           Scheduler: daily workflows, history, de-duplication
@@ -102,7 +103,7 @@ tests/                  node:test suites (scripted model for engine tests)
 | 4 | Built-in calendar | ✅ Done |
 | 5 | Tasks & reminders | ✅ Done |
 | 5 | WhatsApp notifications (to you) | ✅ Done — needs Meta WhatsApp Cloud API setup |
-| 7 | Automations: bedtime schedule ✅, morning schedule ✅ (off by default) · midday check-in, end-of-day wrap-up, weekly review ⏳ | In progress |
+| 7 | Automations: bedtime schedule, morning schedule (off by default), midday check-in, end-of-day wrap-up, weekly review | ✅ Done |
 | 5 | Web research with citations | ⏳ Needs a search API (e.g. Tavily, Brave) |
 | 6 | Document generation (DOCX / PDF / XLSX / PPTX) | ⏳ Planned |
 | — | Messaging other people (with approval) | ⏳ Planned |
