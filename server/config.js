@@ -3,13 +3,21 @@
 // Secrets never leave this module except to the provider client that needs them.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// fileURLToPath handles Windows drive letters (new URL().pathname gives "/C:/...").
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// Returns a hint string when .env is missing (or saved as .env.txt by Notepad).
 export function loadEnvFile(file = path.join(ROOT, '.env')) {
-  if (fs.existsSync(file) && typeof process.loadEnvFile === 'function') {
-    process.loadEnvFile(file);
+  if (fs.existsSync(file)) {
+    if (typeof process.loadEnvFile === 'function') process.loadEnvFile(file);
+    return null;
   }
+  if (fs.existsSync(`${file}.txt`)) {
+    return `Found ".env.txt" but no ".env". Rename it to ".env" (Windows hides the .txt ending — in File Explorer turn on View → File name extensions).`;
+  }
+  return `No .env file found in ${ROOT}. Copy .env.example to .env and add your settings.`;
 }
 
 export const PROVIDER_PRESETS = {

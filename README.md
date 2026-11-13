@@ -26,6 +26,15 @@ A modular, self-hosted personal AI assistant: a dark command-center dashboard, a
 | **Activity log** | Append-only record of important operations, with secrets redacted. |
 | **Settings** | AI engine and per-integration connection status, with no secret ever sent to the browser. |
 
+## Quick start (Windows — easiest)
+
+1. Install **Node.js LTS** from https://nodejs.org (version 22.5 or newer).
+2. On GitHub click **Code → Download ZIP** and unzip it.
+3. Double-click **`start-jarvis.cmd`**. The first time, it opens your settings file (`.env`) in Notepad — add your `GROQ_API_KEY` and `JARVIS_TIMEZONE=Asia/Kolkata`, save, and close Notepad.
+4. Your browser opens **http://127.0.0.1:3000**. Keep the black JARVIS window open while you use it.
+
+Troubleshooting: *"This site can't be reached"* → the JARVIS window was closed or showed an error (read the message there). *"Port 3000 is already in use"* → JARVIS is already running in another window. *"AI engine is not configured"* → `.env` is missing the key, or Notepad saved it as `.env.txt` (the launcher renames it automatically).
+
 ## Quick start
 
 Requires **Node.js 22.5+** (uses the built-in `node:sqlite`). There are **no npm dependencies**.
