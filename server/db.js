@@ -164,6 +164,19 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_reports_type ON reports(type, id);
   `,
+  // v4 — generated documents
+  `
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    format TEXT NOT NULL CHECK (format IN ('docx','pdf','pptx','xlsx')),
+    filename TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    spec TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDatabase(dbPath) {

@@ -59,6 +59,18 @@ export function createServer(app) {
         if (route.methodNotAllowed) throw new HttpError(405, 'Method not allowed.');
         const body = await readJson(req);
         const result = await route.handler({ params: route.params, query: url.searchParams, body });
+        if (result?.__file) {
+          const { buffer, mime, filename } = result.__file;
+          const ascii = filename.replace(/[^\w.-]/g, '_');
+          res.writeHead(200, {
+            ...SECURITY_HEADERS,
+            'Content-Type': mime,
+            'Content-Length': buffer.length,
+            'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            'Cache-Control': 'no-store',
+          });
+          return res.end(buffer);
+        }
         if (result && typeof result.__redirect === 'string' && result.__redirect.startsWith('/')) {
           res.writeHead(302, { Location: result.__redirect, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
           return res.end();

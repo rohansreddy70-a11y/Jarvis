@@ -47,8 +47,8 @@ export function integrationStatus(config, runtime = {}) {
     },
     {
       id: 'documents', name: 'Document generation', phase: 6,
-      description: 'Word, PDF, Excel and PowerPoint output.',
-      status: 'not_implemented', requires: [],
+      description: 'Word, PDF, Excel and PowerPoint files, built locally (no external service).',
+      status: 'configured', requires: [],
     },
     {
       id: 'notifications', name: 'In-app notifications', phase: 1,

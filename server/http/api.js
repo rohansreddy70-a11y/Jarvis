@@ -127,6 +127,16 @@ export function createApi(app) {
   r.get('/api/reports/:id', ({ params }) => s.reports.get(params.id));
   r.post('/api/reports/generate', async ({ body }) => s.reports.generate(body.type, { actor: user }));
 
+  // ── Documents ──
+  r.get('/api/documents', () => s.documents.list());
+  r.post('/api/documents', ({ body }) => s.documents.create(body, user));
+  r.post('/api/reports/:id/export', ({ params, body }) => s.documents.createFromReport(s.reports.get(params.id), body.format, user));
+  r.get('/api/documents/:id/download', ({ params }) => {
+    const { doc, buffer, mime } = s.documents.read(params.id);
+    return { __file: { buffer, mime, filename: doc.filename.replace(/^\d+-/, '') } };
+  });
+  r.delete('/api/documents/:id', ({ params }) => s.documents.remove(params.id, user)); // user-initiated, UI confirms first
+
   // ── Gmail ──
   r.get('/api/integrations/google/auth-url', () => ({ url: google.authUrl(), redirectUri: google.redirectUri }));
   // Browser redirect from Google: exempt from bearer auth, protected by one-time state.

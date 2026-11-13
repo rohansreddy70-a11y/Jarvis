@@ -18,6 +18,7 @@ import { createGoogle } from './integrations/google.js';
 import { createWhatsApp } from './integrations/whatsapp.js';
 import { createAutomationEngine } from './automations/engine.js';
 import { createReportService } from './services/reports.js';
+import { createDocumentService } from './services/documents.js';
 
 export function createApp(config, { provider, fetchImpl } = {}) {
   const db = openDatabase(config.dbPath);
@@ -34,6 +35,7 @@ export function createApp(config, { provider, fetchImpl } = {}) {
     approvals: createApprovalService(db, activity, notifications),
     conversations: createConversationService(db),
     events: createEventService(db, activity),
+    documents: createDocumentService(db, activity, config),
   };
   services.schedule = createScheduleService(services, config);
 
@@ -55,6 +57,9 @@ export function createApp(config, { provider, fetchImpl } = {}) {
   });
   services.approvals.registerExecutor('event.delete', {
     execute: ({ id }) => `Deleted event "${services.events.remove(id, 'assistant (approved)').title}".`,
+  });
+  services.approvals.registerExecutor('document.delete', {
+    execute: ({ id }) => `Deleted document "${services.documents.remove(id, 'assistant (approved)').title}".`,
   });
   services.approvals.registerExecutor('draft.send', {
     execute: async ({ draft_id }) => {

@@ -95,11 +95,24 @@ const DEFINITIONS = [
   t('generate_report', 'Generate and save a productivity report: "midday" (check-in: done vs pending, delays, problems, suggested order), "end_of_day" (wrap-up + manager status update saved as a draft), or "weekly" (weekly review with organization suggestions). Returns the report text.', {
     type: { type: 'string', enum: ['midday', 'end_of_day', 'weekly'] },
   }, ['type']),
+  t('create_document', 'Create a downloadable file. For docx (Word), pdf and pptx (PowerPoint) pass "markdown": use # / ## headings, paragraphs, "- " bullets, "1. " numbered lists, | tables |, **bold**, *italic*. For pptx every "#" or "##" heading starts a new slide (keep 3–6 bullets per slide). For xlsx (Excel) pass "sheets": [{ name, columns: [...], rows: [[...]] }] — use real numbers, and strings starting with "=" become formulas (e.g. "=SUM(B2:B5)"). Write complete, polished content; never invent facts, figures or names the user did not provide — mark unknowns as [TBD].', {
+    format: { type: 'string', enum: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    title: { type: 'string' },
+    subtitle: { type: 'string' },
+    markdown: { type: 'string', description: 'Content for docx, pdf and pptx.' },
+    sheets: {
+      type: 'array',
+      description: 'Content for xlsx.',
+      items: { type: 'object', properties: { name: { type: 'string' }, columns: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } }, required: ['columns', 'rows'] },
+    },
+  }, ['format', 'title']),
+  t('list_documents', 'List documents JARVIS has created.'),
+  t('request_delete_document', 'Ask the user to approve deleting a generated document.', { id: { type: 'integer' } }, ['id']),
   t('get_integration_status', 'Check which integrations (email, calendar, research, files, ...) are connected and what each one needs.'),
 ];
 
 export function createToolbox(services, config) {
-  const { tasks, reminders, memory, drafts, approvals, events, schedule, integrations, reports } = services;
+  const { tasks, reminders, memory, drafts, approvals, events, schedule, integrations, reports, documents } = services;
   const integrationStatus = () => integrations.status();
   const A = 'assistant';
 
@@ -184,6 +197,18 @@ export function createToolbox(services, config) {
     generate_report: async ({ type }) => {
       const r = await reports.generate(type, { actor: A });
       return { report_id: r.id, title: r.title, text: r.content, manager_update_draft_id: r.draft_id || undefined, note: r.draft_id ? 'The manager update is saved as a draft; it is NOT sent.' : undefined };
+    },
+    create_document: (a) => {
+      const d = documents.create(a, A);
+      return { document_id: d.id, title: d.title, format: d.format, size_bytes: d.size, note: 'Saved. The user can download it from the Documents page. It has not been shared or sent anywhere.' };
+    },
+    list_documents: () => documents.list().map((d) => ({ id: d.id, title: d.title, format: d.format, created_at: d.created_at })),
+    request_delete_document: ({ id }) => {
+      const d = documents.get(id);
+      return awaiting(approvals.request({
+        actionType: 'document.delete', target: `${d.label} #${d.id}`, summary: `Delete document "${d.title}"`,
+        content: d.filename, payload: { id: d.id },
+      }));
     },
     get_integration_status: () => integrationStatus(),
   };

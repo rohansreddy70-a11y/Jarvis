@@ -16,6 +16,7 @@ A modular, self-hosted personal AI assistant: a dark command-center dashboard, a
 | **Calendar** | Built-in calendar: add events in the app or by chat ("dentist tomorrow at 4pm"). Next-3-weeks agenda with events, deadlines and reminders. |
 | **Bedtime briefing** | Every night (default 21:30 in your time zone) JARVIS sends tomorrow's events, deadlines, reminders and top priorities — in-app and to your WhatsApp. If nothing is planned, it asks you to plan tomorrow. Configurable time/channels, on/off, run history, once-per-day guarantee. |
 | **Reports** | **Midday check-in** (weekdays 13:00): done vs pending, delays, 48-hour deadlines, problems, new important email, schedule changes, suggested order for the rest of the day. **End-of-day wrap-up** (weekdays 18:30): the 8-part daily report plus a manager status update saved as a draft. **Weekly review** (Fridays 17:30): achievements, projects, blockers, deadlines, decisions, next week's priorities, organization suggestions. Built from your data — they never change, remove or send anything. Generate any time from the Reports page or by asking JARVIS. |
+| **Documents** | Create **Word (.docx), PDF, PowerPoint (.pptx) and Excel (.xlsx)** files — from the Documents page, by asking JARVIS ("turn these notes into a 6-slide deck"), or by exporting any report as PDF/Word. Content is written in simple Markdown (Excel: rows/CSV with real numbers and formulas). Built locally with no external service or library; files stay on your machine until you download them. PDF uses standard fonts, so non-Latin scripts (e.g. Hindi) need Word instead. |
 | **Gmail** | Connect with Google sign-in; inbox/unread/important views, read messages, "Summarize with JARVIS", "Draft reply". Sending only after approval. Setup: [docs/SETUP-GMAIL.md](docs/SETUP-GMAIL.md). |
 | **WhatsApp** | Notifications to your own number via Meta WhatsApp Cloud API. Setup: [docs/SETUP-WHATSAPP.md](docs/SETUP-WHATSAPP.md). |
 | **Drafts** | Emails, messages and status updates saved as drafts for review. Never sent automatically. |
@@ -31,7 +32,7 @@ Requires **Node.js 22.5+** (uses the built-in `node:sqlite`). There are **no npm
 cp .env.example .env        # then edit .env — add your AI key
 npm run check-config        # validates config without printing secrets
 npm start                   # http://127.0.0.1:3000
-npm test                    # 33 tests: services, approvals, engine, integrations, automations, reports, HTTP
+npm test                    # 41 tests: services, approvals, engine, integrations, automations, reports, documents, HTTP
 ```
 
 Minimum `.env` for Groq:
@@ -67,6 +68,7 @@ server/
                         conversations, notifications, activity
   automations/
     engine.js           Scheduler: daily workflows, history, de-duplication
+  documents/            Dependency-free generators: zip, markdown, docx, pdf, pptx, xlsx
   integrations/
     registry.js         Honest status reporting for every integration
     google.js           Gmail via OAuth 2.0 (read + approved send)
@@ -105,6 +107,6 @@ tests/                  node:test suites (scripted model for engine tests)
 | 5 | WhatsApp notifications (to you) | ✅ Done — needs Meta WhatsApp Cloud API setup |
 | 7 | Automations: bedtime schedule, morning schedule (off by default), midday check-in, end-of-day wrap-up, weekly review | ✅ Done |
 | 5 | Web research with citations | ⏳ Needs a search API (e.g. Tavily, Brave) |
-| 6 | Document generation (DOCX / PDF / XLSX / PPTX) | ⏳ Planned |
+| 6 | Document generation (Word / PDF / PowerPoint / Excel) | ✅ Done |
 | — | Messaging other people (with approval) | ⏳ Planned |
 | 8 | Advanced voice assistant | Later |

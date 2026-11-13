@@ -799,10 +799,109 @@ views.research = async (root) => {
   );
 };
 
+const DOC_TYPES = {
+  docx: { label: 'Word', ext: '.docx', color: '#4a8cff' },
+  pdf: { label: 'PDF', ext: '.pdf', color: '#ff6b7a' },
+  pptx: { label: 'PowerPoint', ext: '.pptx', color: '#ff9f5a' },
+  xlsx: { label: 'Excel', ext: '.xlsx', color: '#3ddc97' },
+};
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
+// Downloads through fetch so the access token is sent, then saves the blob.
+async function downloadDocument(d) {
+  try {
+    const headers = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/documents/${d.id}/download`, { headers });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Download failed (${res.status})`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = h('a', { href: url, download: d.filename.replace(/^\d+-/, '') });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+const DOC_EXAMPLE = {
+  docx: '# Overview\nWhat this document is about.\n\n## Key points\n- First point\n- Second point\n\n## Next steps\n1. Do this\n2. Then this',
+  pdf: '# Overview\nWhat this document is about.\n\n## Details\n| Item | Owner | Due |\n|---|---|---|\n| Budget | Me | 20 Nov |',
+  pptx: '# Why now\n- Customers asked for it\n- Competitors are slower\n\n# The plan\n1. Pilot in December\n2. Launch in Q1\n\n# Budget\n| Item | Cost |\n|---|---|\n| Pilot | 2,00,000 |',
+  xlsx: 'Item,Planned,Actual,Variance\nTravel,120000,95000,=C2-B2\nVendors,450000,410000,=C3-B3\nTotal,=SUM(B2:B3),=SUM(C2:C3),=C4-B4',
+};
+
+function documentForm(onDone) {
+  const format = h('select', { class: 'input' }, Object.entries(DOC_TYPES).map(([k, v]) => h('option', { value: k }, v.label)));
+  const title = h('input', { class: 'input', required: true, maxlength: 200, placeholder: 'e.g. Q4 Budget Review' });
+  const subtitle = h('input', { class: 'input', maxlength: 300, placeholder: 'Optional' });
+  const content = h('textarea', { class: 'input', required: true, style: 'min-height:240px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px' });
+  const hint = h('div', { class: 'dim' });
+  const sync = () => {
+    const f = format.value;
+    content.placeholder = DOC_EXAMPLE[f];
+    hint.textContent = f === 'xlsx'
+      ? 'Paste rows from a spreadsheet, or type comma-separated values. First line = column headers. Numbers stay numbers; cells starting with = are formulas.'
+      : f === 'pptx'
+        ? 'Each "#" heading starts a new slide. Use "- " bullets, "1. " steps and | tables |. Long slides continue automatically.'
+        : 'Markdown: "#" headings, "- " bullets, "1. " numbered lists, | tables |, **bold**, *italic*.';
+    subtitle.closest('label').hidden = f === 'xlsx';
+  };
+  format.onchange = sync;
+  openModal(h('form', {
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const btn = e.submitter; if (btn) btn.disabled = true;
+      const f = format.value;
+      const body = { format: f, title: title.value, ...(f === 'xlsx' ? { csv: content.value } : { subtitle: subtitle.value, markdown: content.value }) };
+      try {
+        const d = await api('/documents', { method: 'POST', body });
+        closeModal(); toast(`${DOC_TYPES[d.format].label} file created.`); onDone?.(); downloadDocument(d);
+      } catch (err) { toast(err.message, 'err'); if (btn) btn.disabled = false; }
+    },
+  }, h('h2', {}, icon('file'), 'New document'),
+  h('div', { class: 'form-grid section-gap' },
+    h('label', { class: 'field' }, 'Format', format),
+    h('label', { class: 'field' }, 'Title', title),
+    h('label', { class: 'field full' }, 'Subtitle', subtitle),
+    h('label', { class: 'field full' }, 'Content', content, hint)),
+  h('div', { class: 'modal-actions' },
+    h('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn primary', type: 'submit' }, 'Create & download'))));
+  sync();
+  setTimeout(() => title.focus(), 50);
+}
+
 views.documents = async (root) => {
-  fill(root, h('div', { class: 'card' }, emptyState('file', 'Document generation — Phase 6',
-    'Word, PDF, Excel and PowerPoint generation is planned for Phase 6. Today, JARVIS can draft the text of reports, proposals and meeting minutes in chat or as drafts.',
-    h('a', { class: 'btn', href: '#/chat' }, icon('chat'), 'Draft in chat'))));
+  const list = await api('/documents');
+  const reload = () => route();
+  const ask = (prompt) => () => { sessionStorage.setItem('jarvis.pending', prompt); state.conversationId = null; location.hash = '#/chat'; };
+  const IDEAS = [
+    ['Proposal (Word)', 'Create a Word document: a one-page business proposal. Ask me for the client, scope, timeline and price first — do not invent them.'],
+    ['Meeting minutes (Word)', 'Turn my meeting notes into professional meeting minutes as a Word document with decisions, action items (owner, due date) and open questions. I will paste the notes next.'],
+    ['Slide deck (PowerPoint)', 'Create a 6-slide PowerPoint from my notes. I will paste the notes next.'],
+    ['Tracker (Excel)', 'Create an Excel tracker with columns Task, Owner, Due, Status, Notes from my open tasks.'],
+    ['Weekly report (PDF)', 'Generate my weekly review and save it as a PDF.'],
+  ];
+  fill(root,
+    h('div', { class: 'row', style: 'margin-bottom:16px' },
+      h('div', {}, h('div', { class: 'eyebrow' }, 'Documents'), h('div', { class: 'muted small' }, 'Word, PDF, PowerPoint and Excel files, built on this machine. Nothing is shared or sent.')),
+      h('span', { style: 'flex:1' }),
+      h('button', { class: 'btn primary', onclick: () => documentForm(reload) }, icon('plus'), 'New document')),
+    h('div', { class: 'card' },
+      h('h2', {}, icon('spark'), 'Ask JARVIS to write it'),
+      h('div', { class: 'row' }, IDEAS.map(([label, prompt]) => h('button', { class: 'tab', onclick: ask(prompt) }, label)))),
+    h('div', { class: 'card section-gap' },
+      h('h2', {}, icon('file'), `${list.length} document${list.length === 1 ? '' : 's'}`),
+      list.length ? h('div', { class: 'list' }, list.map((d) => h('div', { class: 'item' },
+        h('span', { class: 'pill', style: `color:${DOC_TYPES[d.format].color};border-color:${DOC_TYPES[d.format].color}55;min-width:62px;justify-content:center` }, DOC_TYPES[d.format].ext),
+        h('div', { class: 'item-body' }, h('div', { class: 'item-title' }, d.title),
+          h('div', { class: 'item-meta' }, d.label, '·', fmtSize(d.size), '·', fmt.dt(d.created_at), d.source !== 'user' ? ['·', `by ${d.source}`] : null)),
+        h('div', { class: 'item-actions' },
+          h('button', { class: 'btn sm', onclick: () => downloadDocument(d) }, 'Download'),
+          h('button', { class: 'icon-btn', 'aria-label': 'Delete document', onclick: () => confirmDialog(`Delete "${d.title}"?`, 'The file is removed from this machine. Copies you already downloaded are not affected.', async () => { await api(`/documents/${d.id}`, { method: 'DELETE' }); toast('Document deleted.'); reload(); }) }, icon('trash'))))))
+        : emptyState('file', 'No documents yet', 'Create one above, ask JARVIS ("make a PowerPoint from these notes"), or export a report as PDF or Word.')),
+  );
 };
 
 views.automations = async (root) => {
@@ -899,6 +998,12 @@ async function showReport(id) {
     h('div', { class: 'modal-actions', style: 'flex-wrap:wrap' },
       h('button', { class: 'btn', onclick: closeModal }, 'Close'),
       r.draft_id ? h('a', { class: 'btn', href: '#/email', onclick: closeModal }, icon('mail'), 'Review manager update') : null,
+      ...['pdf', 'docx'].map((f) => h('button', {
+        class: 'btn', onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try { const doc = await api(`/reports/${r.id}/export`, { method: 'POST', body: { format: f } }); toast(`Saved to Documents as ${f === 'pdf' ? 'PDF' : 'Word'}.`); downloadDocument(doc); } catch (err) { toast(err.message, 'err'); }
+        },
+      }, icon('file'), f === 'pdf' ? 'PDF' : 'Word')),
       h('button', {
         class: 'btn primary', onclick: () => {
           closeModal();
