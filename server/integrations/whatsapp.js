@@ -33,39 +33,64 @@ export function templateSafe(text) {
 
 export function createWhatsApp(env, { fetchImpl = fetch } = {}) {
   const cfg = whatsappConfig(env);
+  const textBody = (text) => ({ messaging_product: 'whatsapp', to: cfg.to, type: 'text', text: { preview_url: false, body: String(text).slice(0, 4000) } });
+  async function post(body) {
+    let res;
+    try {
+      res = await fetchImpl(`${GRAPH}/${encodeURIComponent(cfg.phoneNumberId)}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      throw new Error('WhatsApp API could not be reached.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.error?.message ? String(data.error.message).slice(0, 200) : `HTTP ${res.status}`;
+      const hint = /re-engagement|24 hours|131047/.test(JSON.stringify(data)) ? ' (outside the 24-hour window — configure WHATSAPP_TEMPLATE_NAME)' : '';
+      throw new Error(`WhatsApp rejected the message: ${msg}${hint}`);
+    }
+    const id = data?.messages?.[0]?.id;
+    if (!id) throw new Error('WhatsApp did not confirm the message.');
+    return id;
+  }
   return {
+    ownerNumber: cfg.to,
     get configured() { return cfg.configured; },
     get missing() { return cfg.missing; },
     usesTemplate: () => Boolean(cfg.template),
-    // Returns the WhatsApp message id. Throws with a readable error on failure.
+    // Briefings/notifications: uses the approved template when configured, so
+    // they arrive even outside WhatsApp's 24-hour reply window.
     async notifyOwner(text) {
       if (!cfg.configured) throw new Error(`WhatsApp is not configured (missing ${cfg.missing.join(', ')}).`);
-      const body = cfg.template
+      return post(cfg.template
         ? {
           messaging_product: 'whatsapp', to: cfg.to, type: 'template',
           template: { name: cfg.template, language: { code: cfg.templateLang }, components: [{ type: 'body', parameters: [{ type: 'text', text: templateSafe(text) }] }] },
         }
-        : { messaging_product: 'whatsapp', to: cfg.to, type: 'text', text: { preview_url: false, body: text.slice(0, 4000) } };
-      let res;
-      try {
-        res = await fetchImpl(`${GRAPH}/${encodeURIComponent(cfg.phoneNumberId)}/messages`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(20_000),
-        });
-      } catch {
-        throw new Error('WhatsApp API could not be reached.');
-      }
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = data?.error?.message ? String(data.error.message).slice(0, 200) : `HTTP ${res.status}`;
-        const hint = /re-engagement|24 hours|131047/.test(JSON.stringify(data)) ? ' (outside the 24-hour window — configure WHATSAPP_TEMPLATE_NAME)' : '';
-        throw new Error(`WhatsApp rejected the message: ${msg}${hint}`);
-      }
-      const id = data?.messages?.[0]?.id;
-      if (!id) throw new Error('WhatsApp did not confirm the message.');
-      return id;
+        : textBody(text));
+    },
+    // Bot replies: free-form text, valid because the owner just messaged us.
+    async replyToOwner(text) {
+      if (!cfg.configured) throw new Error(`WhatsApp is not configured (missing ${cfg.missing.join(', ')}).`);
+      return post(textBody(text));
+    },
+    // Downloads an inbound media file (e.g. a voice note) by its media id.
+    async downloadMedia(mediaId) {
+      if (!/^[\w.-]{1,128}$/.test(String(mediaId))) throw new Error('Invalid media id.');
+      const auth = { Authorization: `Bearer ${cfg.token}` };
+      const meta = await fetchImpl(`${GRAPH}/${mediaId}`, { headers: auth, signal: AbortSignal.timeout(20_000) });
+      const info = await meta.json().catch(() => ({}));
+      if (!meta.ok || !info.url) throw new Error('Could not get the voice note from WhatsApp.');
+      if (Number(info.file_size) > 16 * 1024 * 1024) throw new Error('Voice note is too large.');
+      // Only send the token to Meta's own media hosts.
+      const host = (() => { try { const u = new URL(info.url); return u.protocol === 'https:' ? u.hostname : ''; } catch { return ''; } })();
+      if (!/(^|\.)(fbsbx\.com|facebook\.com|whatsapp\.net|fbcdn\.net)$/.test(host)) throw new Error('Unexpected media host from WhatsApp.');
+      const file = await fetchImpl(info.url, { headers: auth, signal: AbortSignal.timeout(30_000) });
+      if (!file.ok) throw new Error('Could not download the voice note.');
+      return { buffer: Buffer.from(await file.arrayBuffer()), mime: info.mime_type || 'audio/ogg' };
     },
   };
 }

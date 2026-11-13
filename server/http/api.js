@@ -39,7 +39,8 @@ export function createApi(app) {
   // ── Chat ──
   r.post('/api/chat', async ({ body }) => {
     const message = str(body.message, 'message', { required: true, max: 8000 });
-    return engine.chat({ conversationId: body.conversationId || null, message });
+    const channel = body.channel === 'voice' ? 'voice' : 'web';
+    return engine.chat({ conversationId: body.conversationId || null, message, channel });
   });
   r.get('/api/conversations', () => s.conversations.list());
   r.get('/api/conversations/:id', ({ params }) => ({ ...s.conversations.get(params.id), messages: s.conversations.transcript(params.id) }));
@@ -89,11 +90,7 @@ export function createApi(app) {
   r.get('/api/approvals', ({ query }) => s.approvals.list({ status: query.get('status') || undefined }));
   r.get('/api/approvals/:id', ({ params }) => s.approvals.get(params.id));
   r.post('/api/approvals/:id/confirm', ({ params }) => s.approvals.confirm(params.id));
-  r.post('/api/approvals/:id/reject', ({ params }) => {
-    const a = s.approvals.reject(params.id);
-    if (a.action_type === 'draft.send') s.drafts.setStatus(a.payload.draft_id, 'draft');
-    return a;
-  });
+  r.post('/api/approvals/:id/reject', ({ params }) => s.approvals.reject(params.id));
 
   // ── Notifications & activity ──
   r.get('/api/notifications', () => s.notifications.list());
@@ -163,6 +160,15 @@ export function createApi(app) {
     if (!google.connected) throw new HttpError(409, 'Gmail is not connected.');
     return google.getMessage(params.id);
   });
+
+  // ── WhatsApp bot ──
+  r.get('/api/integrations/whatsapp/bot', () => ({
+    configured: s.whatsappBot.configured,
+    missing: s.whatsappBot.missing(),
+    allowApprovals: s.whatsappBot.allowApprovals,
+    webhookPath: '/api/integrations/whatsapp/webhook',
+    recent: s.whatsappBot.recent(),
+  }));
 
   // ── WhatsApp ──
   r.post('/api/integrations/whatsapp/test', async () => {

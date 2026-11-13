@@ -10,7 +10,8 @@ import { createApprovalService } from './services/approvals.js';
 import { createConversationService } from './services/conversations.js';
 import { createToolbox } from './ai/tools.js';
 import { createEngine } from './ai/engine.js';
-import { createProviderFromConfig } from './ai/provider.js';
+import { createProviderFromConfig, createTranscriber } from './ai/provider.js';
+import { createWhatsAppBot } from './integrations/whatsapp-bot.js';
 import { integrationStatus } from './integrations/registry.js';
 import { createEventService } from './services/events.js';
 import { createScheduleService } from './services/schedule.js';
@@ -43,7 +44,8 @@ export function createApp(config, { provider, fetchImpl } = {}) {
   const net = fetchImpl ? { fetchImpl } : {};
   const google = createGoogle(config, db, net);
   const whatsapp = createWhatsApp(config.env, net);
-  const status = () => integrationStatus(config, { google, whatsapp });
+  const runtime = { google, whatsapp };
+  const status = () => integrationStatus(config, runtime);
   services.integrations = { google, whatsapp, status };
   services.reports = createReportService(services, config);
   services.automations = createAutomationEngine({ db, config, services, whatsapp });
@@ -62,6 +64,7 @@ export function createApp(config, { provider, fetchImpl } = {}) {
     execute: ({ id }) => `Deleted document "${services.documents.remove(id, 'assistant (approved)').title}".`,
   });
   services.approvals.registerExecutor('draft.send', {
+    onReject: ({ draft_id }) => services.drafts.setStatus(draft_id, 'draft'),
     execute: async ({ draft_id }) => {
       const d = services.drafts.get(draft_id);
       if (d.status === 'sent') throw new Error('This draft was already sent.');
@@ -87,6 +90,9 @@ export function createApp(config, { provider, fetchImpl } = {}) {
   const resolvedProvider = provider === undefined ? createProviderFromConfig(config) : provider;
   const toolbox = createToolbox(services, config);
   const engine = createEngine({ config, services, toolbox, getProvider: () => resolvedProvider });
+  const transcriber = createTranscriber(config, net);
+  services.whatsappBot = createWhatsAppBot({ config, db, services, engine, whatsapp, transcriber });
+  runtime.whatsappBot = services.whatsappBot;
 
   let ticker = null;
   return {

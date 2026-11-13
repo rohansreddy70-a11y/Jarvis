@@ -288,3 +288,47 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
   .tbl .hide-sm { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ── Voice assistant ── */
+.voice { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 380px); gap: 18px; min-height: calc(100vh - 67px - 56px); }
+.voice-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 30px 20px; text-align: center; position: relative; overflow: hidden; }
+.orb-wrap { position: relative; width: 240px; height: 240px; display: grid; place-items: center; }
+.orb {
+  width: 170px; height: 170px; border-radius: 50%; border: 0; cursor: pointer; position: relative; z-index: 1;
+  background: radial-gradient(circle at 35% 30%, #9be3ff 0%, #4cb6ff 30%, #3b5bdb 65%, #1a2a6c 100%);
+  box-shadow: 0 0 40px rgba(92, 200, 255, .45), inset 0 -12px 30px rgba(0, 0, 40, .45);
+  transition: transform .25s ease, box-shadow .25s ease, filter .25s ease;
+}
+.orb:hover { transform: scale(1.03); }
+.orb:focus-visible { outline: 3px solid var(--accent); outline-offset: 6px; }
+.orb svg { width: 46px; height: 46px; color: rgba(255, 255, 255, .92); stroke-width: 1.8; }
+.orb-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(92, 200, 255, .35); opacity: 0; }
+.voice[data-state="idle"] .orb { filter: saturate(.75) brightness(.9); }
+.voice[data-state="listening"] .orb { box-shadow: 0 0 70px rgba(92, 200, 255, .85), inset 0 -12px 30px rgba(0, 0, 40, .4); }
+.voice[data-state="listening"] .orb-ring { animation: ring 1.6s ease-out infinite; }
+.voice[data-state="listening"] .orb-ring:nth-child(2) { animation-delay: .53s; }
+.voice[data-state="listening"] .orb-ring:nth-child(3) { animation-delay: 1.06s; }
+@keyframes ring { from { transform: scale(.72); opacity: .9; } to { transform: scale(1.18); opacity: 0; } }
+.voice[data-state="thinking"] .orb { animation: think 1.2s ease-in-out infinite; background: radial-gradient(circle at 35% 30%, #d5c6ff 0%, #8e7bff 35%, #4b3bdb 70%, #1d1660 100%); }
+@keyframes think { 0%, 100% { transform: scale(.96); } 50% { transform: scale(1.04); } }
+.voice[data-state="speaking"] .orb { animation: speak .5s ease-in-out infinite alternate; }
+@keyframes speak { from { transform: scale(1); box-shadow: 0 0 40px rgba(92, 200, 255, .5); } to { transform: scale(1.07); box-shadow: 0 0 80px rgba(92, 200, 255, .9); } }
+.voice-status { font: 600 13px var(--font); letter-spacing: .22em; text-transform: uppercase; color: var(--accent); min-height: 20px; }
+.voice-live { font: 500 20px/1.45 var(--display); max-width: 640px; min-height: 58px; color: var(--text); }
+.voice-live.interim { color: var(--muted); }
+.voice-controls { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--muted); cursor: pointer; user-select: none; }
+.switch input { appearance: none; width: 34px; height: 20px; border-radius: 99px; background: rgba(255,255,255,.12); position: relative; cursor: pointer; transition: background .2s; margin: 0; }
+.switch input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { transform: translateX(14px); }
+.voice-log { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: calc(100vh - 67px - 56px - 120px); }
+.voice-log .msg { max-width: 100%; font-size: 14px; }
+.kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-hi); border-bottom-width: 2px; border-radius: 6px; font-size: 12px; color: var(--text); }
+@media (max-width: 860px) {
+  .voice { grid-template-columns: 1fr; min-height: 0; }
+  .orb-wrap { width: 200px; height: 200px; }
+  .orb { width: 140px; height: 140px; }
+  .voice-live { font-size: 17px; }
+  .voice-log { max-height: none; }
+}

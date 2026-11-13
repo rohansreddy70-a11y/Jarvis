@@ -19,7 +19,8 @@ const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), geolocation=(), microphone=(self)',
 };
 
-const PUBLIC_API = new Set(['/api/health', '/api/integrations/google/callback']);
+const WA_WEBHOOK = '/api/integrations/whatsapp/webhook';
+const PUBLIC_API = new Set(['/api/health', '/api/integrations/google/callback', WA_WEBHOOK]);
 
 function safeEqual(a, b) {
   const ab = Buffer.from(a);
@@ -27,10 +28,45 @@ function safeEqual(a, b) {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
+async function readRaw(req, limit = 1_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > limit) throw new HttpError(413, 'Request body too large.');
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks);
+}
+
 export function createServer(app) {
   const api = createApi(app);
   const publicDir = path.join(app.config.root, 'public');
   const { accessToken } = app.config;
+
+  async function handleWhatsAppWebhook(req, res, url) {
+    const bot = app.services.whatsappBot;
+    const plain = (status, text) => { res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY_HEADERS }); res.end(text); };
+    try {
+      if (req.method === 'GET') {
+        const challenge = bot.verifySubscription(url.searchParams);
+        return challenge === null ? plain(403, 'Verification failed.') : plain(200, challenge);
+      }
+      if (req.method !== 'POST') return plain(405, 'Method not allowed.');
+      const raw = await readRaw(req);
+      if (!bot.verifySignature(raw, req.headers['x-hub-signature-256'])) {
+        app.services.activity.log('whatsapp.rejected', 'Rejected a WhatsApp webhook call with a missing or invalid signature');
+        return plain(401, 'Invalid signature.');
+      }
+      let payload;
+      try { payload = JSON.parse(raw.toString('utf8')); } catch { return plain(400, 'Invalid JSON.'); }
+      const jobs = bot.accept(payload);
+      plain(200, 'OK'); // acknowledge immediately; Meta retries slow responses
+      await Promise.allSettled(jobs);
+    } catch (err) {
+      if (!res.headersSent) plain(err.status || 500, err.status ? err.message : 'Error.');
+    }
+  }
 
   const send = (res, status, data) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
@@ -40,6 +76,10 @@ export function createServer(app) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const pathname = url.pathname;
+
+    // Meta's WhatsApp webhook: no bearer token (Meta can't send one); GET is the
+    // verify-token handshake, POST must carry a valid HMAC signature.
+    if (pathname === WA_WEBHOOK) return handleWhatsAppWebhook(req, res, url);
 
     if (pathname.startsWith('/api/')) {
       try {

@@ -129,6 +129,7 @@ function askForToken() {
 const NAV = [
   ['home', 'Home', 'home'],
   ['chat', 'AI Chat', 'chat'],
+  ['voice', 'Voice', 'mic'],
   ['today', 'Today', 'sun'],
   ['email', 'Email', 'mail'],
   ['calendar', 'Calendar', 'cal'],
@@ -434,7 +435,7 @@ views.home = async (root) => {
           h('div', { class: 'sub' }, 'Your priorities'), h('div', { class: 'value' }, `${t.open}`), h('div', { class: 'sub' }, `open · ${t.overdue} overdue`)),
         h('a', { class: 'brief', href: '#/research' }, icon('spark'), h('div', { class: 'label' }, 'INTELLIGENCE'),
           h('div', { class: 'sub' }, research.connected ? 'Latest updates' : 'Web research not connected'), h('div', { class: 'value' }, `${d.memoryCount}`), h('div', { class: 'sub' }, 'facts in memory'))),
-      h('div', { class: 'ask' }, h('label', {}, icon('spark'), 'Ask JARVIS'), askBox())),
+      h('div', { class: 'ask' }, h('label', {}, icon('spark'), 'Ask JARVIS', h('a', { class: 'btn sm', href: '#/voice', style: 'margin-left:auto' }, icon('mic'), 'Talk')), askBox())),
 
     d.approvals.length ? h('div', { class: 'notice section-gap' }, icon('shield'),
       h('div', { style: 'flex:1' }, h('strong', {}, `${d.approvals.length} action${d.approvals.length > 1 ? 's' : ''} awaiting your approval.`), ' Nothing is sent or deleted until you confirm.'),
@@ -564,6 +565,233 @@ views.chat = async (root) => {
   await loadConversation(state.conversationId);
   const pending = sessionStorage.getItem('jarvis.pending');
   if (pending) { sessionStorage.removeItem('jarvis.pending'); ta.value = pending; send(); } else ta.focus();
+};
+
+// ───────── Voice assistant ─────────
+// Speech-to-text and text-to-speech use the browser's built-in Web Speech API.
+const pref = {
+  get(k, d) { try { const v = localStorage.getItem(`jarvis.voice.${k}`); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`jarvis.voice.${k}`, JSON.stringify(v)); } catch { /* ignore */ } },
+};
+
+// Markdown → something pleasant to hear.
+function speakable(text) {
+  let t = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, 'the link on screen')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_`#>|]/g, '')
+    .replace(/^\s*[-•]\s+/gm, '')
+    .replace(/\p{Extended_Pictographic}|️/gu, '')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\n/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (t.length > 600) {
+    const cut = t.slice(0, 600);
+    t = `${cut.slice(0, Math.max(cut.lastIndexOf('. '), 300) + 1)} The full answer is on screen.`;
+  }
+  return t;
+}
+
+views.voice = async (root) => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canSpeak = 'speechSynthesis' in window;
+  const secure = window.isSecureContext;
+  const LANGS = [['en-IN', 'English (India)'], ['en-US', 'English (US)'], ['en-GB', 'English (UK)'], ['hi-IN', 'Hindi']];
+  let lang = pref.get('lang', 'en-IN');
+  let conversation = pref.get('conversation', true);
+  let speakReplies = pref.get('speak', true);
+  let voiceName = pref.get('voiceName', '');
+  let convId = Number(sessionStorage.getItem('jarvis.voiceConv')) || null;
+
+  let rec = null;
+  let busy = false;
+  let alive = true;
+  let stateName = 'idle';
+
+  const wrap = h('div', { class: 'voice', 'data-state': 'idle' });
+  const statusEl = h('div', { class: 'voice-status', role: 'status', 'aria-live': 'polite' });
+  const live = h('div', { class: 'voice-live' });
+  const log = h('div', { class: 'voice-log', 'aria-live': 'polite' });
+  const orb = h('button', { class: 'orb', 'aria-label': 'Talk to JARVIS' }, icon('mic'));
+  const setState = (s, label) => {
+    stateName = s;
+    wrap.dataset.state = s;
+    statusEl.textContent = label ?? { idle: 'Tap to talk', listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking — tap to interrupt' }[s];
+  };
+
+  const addLog = (role, content, actions = [], error = false) => {
+    const el = h('div', { class: `msg ${role}${error ? ' error' : ''}` },
+      role === 'assistant' ? h('div', { class: 'who' }, 'JARVIS') : null,
+      role === 'assistant' ? h('div', { class: 'md', html: md(content) }) : content,
+      actions.some((a) => a.approvalId) ? h('div', { class: 'actions-used' }, actions.filter((a) => a.approvalId).map((a) =>
+        h('button', { class: 'pill warn', style: 'cursor:pointer', onclick: () => showApproval(a.approvalId) }, icon('shield'), 'Review & approve'))) : null,
+      actions.some((a) => !a.approvalId) ? h('div', { class: 'actions-used' }, actions.filter((a) => !a.approvalId).map((a) =>
+        h('span', { class: `pill ${a.ok ? 'info' : 'err'}` }, a.ok ? '✓ ' : '✕ ', a.tool.replace(/_/g, ' ')))) : null);
+    log.prepend(el);
+  };
+
+  // ── Speech output ──
+  function pickVoice() {
+    const voices = canSpeak ? speechSynthesis.getVoices() : [];
+    return voices.find((v) => v.name === voiceName)
+      || voices.find((v) => v.lang === lang)
+      || voices.find((v) => v.lang?.startsWith(lang.split('-')[0]))
+      || null;
+  }
+  function speak(text) {
+    return new Promise((resolve) => {
+      if (!canSpeak || !speakReplies || !alive) return resolve();
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(speakable(text));
+      const v = pickVoice();
+      if (v) u.voice = v;
+      u.lang = v?.lang || lang;
+      u.rate = 1.02;
+      u.onend = u.onerror = () => resolve();
+      setState('speaking');
+      speechSynthesis.speak(u);
+    });
+  }
+  const stopSpeaking = () => { if (canSpeak) speechSynthesis.cancel(); };
+
+  // ── Speech input ──
+  function listen() {
+    if (!alive || busy) return;
+    if (!SR) { toast('Voice input is not supported in this browser. Use Chrome, Edge or Safari, or type below.', 'err'); return; }
+    if (!secure) { toast('The microphone needs a secure page (https or localhost).', 'err'); return; }
+    stopSpeaking();
+    if (rec) { rec.abort(); rec = null; }
+    rec = new SR();
+    rec.lang = lang;
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = '';
+    rec.onstart = () => { setState('listening'); live.textContent = ''; live.classList.add('interim'); };
+    rec.onresult = (e) => {
+      let interim = '';
+      for (const r of e.results) (r.isFinal ? (finalText += r[0].transcript) : (interim += r[0].transcript));
+      live.textContent = finalText || interim;
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Microphone permission was denied. Allow it in the browser\'s site settings.', 'err');
+      else if (e.error === 'network') toast('Speech recognition needs an internet connection in this browser.', 'err');
+      else if (e.error !== 'no-speech' && e.error !== 'aborted') toast(`Voice input error: ${e.error}`, 'err');
+    };
+    rec.onend = () => {
+      rec = null;
+      live.classList.remove('interim');
+      const text = finalText.trim();
+      if (text) ask(text);
+      else if (stateName === 'listening') setState('idle', 'Didn\'t catch that — tap to try again');
+    };
+    try { rec.start(); } catch { /* already started */ }
+  }
+
+  async function ask(text) {
+    if (busy || !alive) return;
+    busy = true;
+    live.textContent = text;
+    addLog('user', text);
+    setState('thinking');
+    try {
+      const r = await api('/chat', { method: 'POST', body: { message: text, conversationId: convId, channel: 'voice' } });
+      convId = r.conversationId;
+      sessionStorage.setItem('jarvis.voiceConv', String(convId));
+      if (!alive) return;
+      addLog('assistant', r.reply, r.actions);
+      live.textContent = r.reply.length > 220 ? `${speakable(r.reply).slice(0, 220)}…` : speakable(r.reply);
+      busy = false;
+      refreshChrome();
+      await speak(r.reply);
+      if (!alive) return;
+      setState('idle');
+      if (conversation && SR && secure && !r.actions.some((a) => a.approvalId)) listen();
+    } catch (err) {
+      busy = false;
+      if (!alive) return;
+      addLog('assistant', err.message, [], true);
+      live.textContent = '';
+      setState('idle', 'Something went wrong');
+      speak(err.message.length < 160 ? err.message : 'Sorry, something went wrong. The details are on screen.');
+    }
+  }
+
+  orb.onclick = () => {
+    if (stateName === 'listening') { rec?.stop(); return; }
+    if (stateName === 'speaking') { stopSpeaking(); setState('idle'); listen(); return; }
+    if (stateName === 'thinking') return;
+    listen();
+  };
+  const onKey = (e) => {
+    if (e.code !== 'Space' || e.repeat || /INPUT|TEXTAREA|SELECT|BUTTON/.test(document.activeElement?.tagName || '') || $('#modal-root').childElementCount) return;
+    e.preventDefault();
+    orb.click();
+  };
+  document.addEventListener('keydown', onKey);
+  state.viewCleanup = () => {
+    alive = false;
+    document.removeEventListener('keydown', onKey);
+    if (rec) { rec.abort(); rec = null; }
+    stopSpeaking();
+  };
+
+  // ── Settings ──
+  const sw = (label, value, onChange) => {
+    const input = h('input', { type: 'checkbox', checked: value, onchange: (e) => onChange(e.target.checked) });
+    return h('label', { class: 'switch' }, input, label);
+  };
+  const langSel = h('select', { class: 'input', style: 'width:auto', 'aria-label': 'Language', onchange: (e) => { lang = e.target.value; pref.set('lang', lang); fillVoices(); } },
+    LANGS.map(([v, l]) => h('option', { value: v, selected: v === lang }, l)));
+  const voiceSel = h('select', { class: 'input', style: 'width:auto;max-width:220px', 'aria-label': 'Voice', onchange: (e) => { voiceName = e.target.value; pref.set('voiceName', voiceName); speak('This is how I sound.'); } });
+  function fillVoices() {
+    if (!canSpeak) return;
+    const voices = speechSynthesis.getVoices();
+    const base = lang.split('-')[0];
+    const list = voices.filter((v) => v.lang?.startsWith(base));
+    fill(voiceSel, h('option', { value: '' }, 'Automatic voice'), list.map((v) => h('option', { value: v.name, selected: v.name === voiceName }, `${v.name} (${v.lang})`)));
+  }
+  if (canSpeak) { fillVoices(); speechSynthesis.onvoiceschanged = () => alive && fillVoices(); }
+
+  const typed = h('input', { class: 'input', placeholder: SR ? 'Or type here and press Enter' : 'Type your question and press Enter', 'aria-label': 'Type to JARVIS' });
+  typed.addEventListener('keydown', (e) => { if (e.key === 'Enter' && typed.value.trim()) { const v = typed.value.trim(); typed.value = ''; ask(v); } });
+
+  const notices = [];
+  if (!SR) notices.push(h('div', { class: 'notice' }, icon('mic'), h('div', {}, h('strong', {}, 'Voice input isn\'t available in this browser. '), 'Use Chrome, Edge or Safari for speech. You can still type — JARVIS will answer out loud.')));
+  if (SR && !secure) notices.push(h('div', { class: 'notice' }, icon('shield'), h('div', {}, h('strong', {}, 'The microphone needs a secure page. '), 'Open JARVIS at http://localhost or over https (for a phone, use the tunnel address).')));
+
+  setState('idle');
+  fill(wrap,
+    h('div', { class: 'card voice-stage' },
+      ...notices,
+      h('div', { class: 'orb-wrap' }, h('span', { class: 'orb-ring' }), h('span', { class: 'orb-ring' }), h('span', { class: 'orb-ring' }), orb),
+      statusEl,
+      live,
+      h('div', { class: 'voice-controls' },
+        sw('Conversation mode', conversation, (v) => { conversation = v; pref.set('conversation', v); }),
+        sw('Speak replies', speakReplies, (v) => { speakReplies = v; pref.set('speak', v); if (!v) stopSpeaking(); }),
+        langSel, canSpeak ? voiceSel : null),
+      h('div', { style: 'width:min(520px,100%)' }, typed),
+      h('div', { class: 'dim', style: 'max-width:560px' },
+        SR ? ['Tap the orb or press ', h('span', { class: 'kbd' }, 'Space'), ' to talk. '] : null,
+        'Sends and deletes always need a tap on Confirm — never just your voice. ',
+        'Speech recognition is done by your browser; Chrome and Edge send the audio to Google/Microsoft to transcribe it.')),
+    h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', {}, icon('chat'), 'Conversation'), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn sm ghost', onclick: () => { convId = null; sessionStorage.removeItem('jarvis.voiceConv'); fill(log); toast('Started a new voice conversation.'); } }, 'New')),
+      log),
+  );
+  fill(root, wrap);
+
+  if (convId) {
+    try {
+      const c = await api(`/conversations/${convId}`);
+      for (const m of c.messages.slice(-12)) addLog(m.role, m.content);
+    } catch { convId = null; sessionStorage.removeItem('jarvis.voiceConv'); }
+  }
+  if (!log.childElementCount) log.append(h('div', { class: 'dim' }, 'Try: "What\'s on my schedule tomorrow?" · "Remind me to call Priya at 5" · "Give me my midday check-in"'));
 };
 
 views.today = async (root) => {
@@ -1154,6 +1382,7 @@ async function route() {
   if (name === 'approvals' && sub) { showApproval(sub).catch((e) => toast(e.message, 'err')); location.hash = '#/home'; return; }
   if (name === 'reports' && sub) { location.hash = '#/reports'; setTimeout(() => showReport(sub).catch((e) => toast(e.message, 'err')), 300); return; }
   closeModal();
+  if (state.viewCleanup) { try { state.viewCleanup(); } catch { /* ignore */ } state.viewCleanup = null; }
   const view = views[name] ? name : 'home';
   renderNav(view);
   const label = NAV.find((n) => n[0] === view)[1];
@@ -1190,3 +1419,29 @@ setInterval(async () => {
   if (lastUnread != null && un > lastUnread) toast('New notification — check the bell.');
   lastUnread = un;
 }, 20_000);
+
+// Settings: WhatsApp bot panel (appended under the integrations table).
+{
+  const baseSettings = views.settings;
+  views.settings = async (root) => {
+    await baseSettings(root);
+    let bot;
+    try { bot = await api('/integrations/whatsapp/bot'); } catch { return; }
+    const webhook = `${location.origin}${bot.webhookPath}`;
+    const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
+    root.append(h('div', { class: 'card section-gap' },
+      h('div', { class: 'card-head' }, h('h2', {}, icon('chat'), 'WhatsApp bot'), h('span', { class: 'spacer' }),
+        h('span', { class: `pill ${bot.configured ? 'ok' : ''}` }, bot.configured ? 'configured' : 'not set up')),
+      h('p', { class: 'muted small', style: 'margin-top:0' }, 'Message JARVIS from WhatsApp (text or voice notes). It only ever answers your own number. Setup guide: ', h('code', {}, 'docs/SETUP-WHATSAPP.md'), '.'),
+      h('dl', { class: 'kv', style: 'margin-top:0' },
+        h('dt', {}, 'Webhook URL'), h('dd', {}, h('code', {}, local ? `https://<your-tunnel-address>${bot.webhookPath}` : webhook),
+          local ? h('div', { class: 'dim' }, 'Meta needs a public https address. Start a tunnel (see the guide) and use its address here.') : null),
+        h('dt', {}, 'Needs'), h('dd', {}, bot.missing.length ? h('code', {}, bot.missing.join(', ')) : 'Nothing — ready.'),
+        h('dt', {}, 'Approvals'), h('dd', {}, bot.allowApprovals ? 'Allowed from WhatsApp with "APPROVE <id>"' : 'Only in this app (WHATSAPP_ALLOW_APPROVALS is off)')),
+      bot.recent.length ? [h('div', { class: 'dim', style: 'margin-bottom:6px' }, 'Recent messages'),
+        h('div', { class: 'list' }, bot.recent.slice(0, 8).map((m) => h('div', { class: 'item' },
+          h('span', { class: `pill ${m.status === 'processed' ? 'ok' : m.status === 'failed' ? 'err' : ''}` }, m.type === 'audio' ? '🎙 voice' : m.type),
+          h('div', { class: 'item-body' }, h('div', { class: 'small' }, m.text || '—'),
+            h('div', { class: 'dim' }, fmt.dt(m.received_at), m.error ? ` · ${m.error}` : '')))))] : null));
+  };
+}
