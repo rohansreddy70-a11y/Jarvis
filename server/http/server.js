@@ -132,12 +132,13 @@ export function createServer(app) {
     let file = path.normalize(path.join(publicDir, pathname === '/' ? 'index.html' : pathname));
     if (!file.startsWith(publicDir + path.sep)) return send(res, 403, { error: 'Forbidden.' });
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(publicDir, 'index.html');
+    if (!fs.existsSync(file)) return send(res, 500, { error: `JARVIS web files not found in ${publicDir}. Re-download the project.` });
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
       ...SECURITY_HEADERS,
     });
     if (req.method === 'HEAD') return res.end();
-    fs.createReadStream(file).pipe(res);
+    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
   });
 }

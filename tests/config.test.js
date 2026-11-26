@@ -5,7 +5,7 @@ import { buildConfig, publicStatus } from '../server/config.js';
 test('public status never contains the API key', () => {
   const cfg = buildConfig({ GROQ_API_KEY: 'gsk_supersecretvalue1234567890', JARVIS_DB_PATH: ':memory:' });
   assert.equal(cfg.ai.configured, true);
-  assert.equal(cfg.ai.model, 'llama-3.3-70b-versatile');
+  assert.equal(cfg.ai.model, 'openai/gpt-oss-120b');
   assert.ok(!JSON.stringify(publicStatus(cfg)).includes('gsk_'));
 });
 
