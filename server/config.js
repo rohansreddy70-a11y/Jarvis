@@ -25,7 +25,7 @@ export const PROVIDER_PRESETS = {
     label: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1',
     keyVar: 'GROQ_API_KEY',
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'openai/gpt-oss-120b',
   },
   openai: {
     label: 'OpenAI',
